@@ -1,0 +1,69 @@
+@import './theme.css';
+@import 'prismjs/themes/prism-okaidia.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html, body, #root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  touch-action: none; /* Crucial for custom stylus / touch gesture handling */
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
+
+/* Custom Window Drag Regions for Electron Borderless Frame */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Loading Bar Shimmer Animation */
+@keyframes loading-progress {
+  0% {
+    width: 0%;
+    margin-left: 0%;
+  }
+  50% {
+    width: 65%;
+    margin-left: 20%;
+  }
+  100% {
+    width: 100%;
+    margin-left: 0%;
+  }
+}
+
+.animate-loading-bar {
+  animation: loading-progress 1.5s ease-in-out infinite;
+}

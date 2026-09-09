@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: blob:;" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <title>ThunderBoard - Intelligent Teaching Whiteboard & Code Canvas</title>
+    <style>
+      body, html {
+        margin: 0;
+        padding: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: #0b0f19;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        color: #f1f5f9;
+        user-select: none;
+      }
+      #root {
+        width: 100%;
+        height: 100%;
+      }
+      /* Instant Splash Loader Styles */
+      /* Instant Zero-Latency Splash Screen */
+      .app-splash {
+        position: fixed;
+        inset: 0;
+        background-color: #0e1117;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 99999;
+      }
+      .splash-card {
+        position: relative;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+      }
+      .progress-track {
+        width: 220px;
+        height: 4px;
+        background: #1e293b;
+        border-radius: 9999px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        position: relative;
+        margin-bottom: 12px;
+      }
+      .progress-bar {
+        position: absolute;
+        height: 100%;
+        background: #3b82f6;
+        border-radius: 9999px;
+        animation: splash-load 1.2s ease-in-out infinite;
+      }
+      @keyframes splash-load {
+        0% { left: 0%; width: 0%; }
+        50% { left: 20%; width: 65%; }
+        100% { left: 100%; width: 0%; }
+      }
+      .status-text {
+        font-size: 11px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        color: #94a3b8;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .status-dot {
+        width: 6px;
+        height: 6px;
+        background-color: #3b82f6;
+        border-radius: 50%;
+      }
+      .offline-badge {
+        position: absolute;
+        bottom: 24px;
+        font-size: 11px;
+        color: #64748b;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <!-- Instant Zero-Latency Splash Screen -->
+      <div class="app-splash">
+        <div class="splash-card">
+          <div class="progress-track">
+            <div class="progress-bar"></div>
+          </div>
+          <div class="status-text">
+            <span class="status-dot"></span>
+            Loading workspace...
+          </div>
+        </div>
+        <div class="offline-badge">Offline-First • Hardware Accelerated</div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
