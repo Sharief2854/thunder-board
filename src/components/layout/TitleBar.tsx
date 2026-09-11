@@ -17,6 +17,7 @@ interface TitleBarProps {
   onRedo?: () => void;
   onClear?: () => void;
   saveStatus: 'saved' | 'saving' | 'unsaved';
+  onClose?: () => Promise<void> | void;
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
@@ -33,6 +34,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onRedo,
   onClear,
   saveStatus,
+  onClose,
 }) => {
   const [isMaximized, setIsMaximized] = useState(false);
   const [activeMenu, setActiveMenu] = useState<'file' | 'edit' | 'view' | 'settings' | null>(null);
@@ -64,8 +66,10 @@ export const TitleBar: React.FC<TitleBarProps> = ({
     setIsMaximized(max ?? false);
   };
 
-  const handleClose = () => {
-    if (window.smartBoardAPI) {
+  const handleClose = async () => {
+    if (onClose) {
+      await onClose();
+    } else if (window.smartBoardAPI) {
       window.smartBoardAPI.close();
     } else {
       window.close();

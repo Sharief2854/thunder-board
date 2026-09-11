@@ -34,18 +34,36 @@ export class StrokeBuilder {
     const screenY = e.clientY - rect.top;
     const world = Viewport.screenToWorld(screenX, screenY, transform);
 
-    // Normalize pressure: if device doesn't supply pressure, fallback to 0.5
-    let pressure = e.pressure;
-    if (e.pointerType === 'mouse' && pressure === 0) {
-      pressure = 0.5;
-    } else if (pressure === 0) {
-      pressure = 0.5;
+    // Micro-jitter filtering: ignore duplicate/micro points that cause polygon facet noise
+    if (this.points.length > 0) {
+      const last = this.points[this.points.length - 1];
+      const dx = world.x - last.x;
+      const dy = world.y - last.y;
+      // Fast squared distance check avoids Math.hypot sqrt overhead and filters sub-pixel duplicates
+      if (dx * dx + dy * dy < 1.2) {
+        return last;
+      }
+    }
+
+    // Normalize and smooth pressure
+    let rawPressure = e.pressure;
+    if (e.pointerType === 'mouse' && rawPressure === 0) {
+      rawPressure = 0.5;
+    } else if (rawPressure === 0) {
+      rawPressure = 0.5;
+    }
+
+    // Exponential moving average for pressure to eliminate hardware sensor noise
+    let smoothedPressure = rawPressure;
+    if (this.points.length > 0) {
+      const prevPressure = this.points[this.points.length - 1].pressure || 0.5;
+      smoothedPressure = prevPressure * 0.3 + rawPressure * 0.7;
     }
 
     const point: InkPoint = {
       x: world.x,
       y: world.y,
-      pressure,
+      pressure: smoothedPressure,
       tiltX: e.tiltX,
       tiltY: e.tiltY,
       timestamp: Date.now(),

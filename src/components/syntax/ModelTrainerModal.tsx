@@ -8,10 +8,12 @@ import {
   RotateCcw,
   Layers,
   BrainCircuit,
+  ShieldCheck,
+  RefreshCw,
 } from 'lucide-react';
 import { Stroke, BoardThemeType } from '../../types/whiteboard';
 import { HandwritingModelTrainer, TrainingSample } from '../../core/syntax/HandwritingModelTrainer';
-import { SyntaxTokenType } from '../../core/syntax/SyntaxHighlighterEngine';
+import { SyntaxTokenType, SYNTAX_PALETTE } from '../../core/syntax/SyntaxHighlighterEngine';
 import { StrokeBuilder } from '../../core/inking/StrokeBuilder';
 import { Smoother } from '../../core/inking/Smoother';
 
@@ -28,6 +30,28 @@ interface DefaultTokenCategory {
 
 const PRESET_CATEGORIES: DefaultTokenCategory[] = [
   {
+    category: 'Python Keywords',
+    tokens: [
+      { token: 'def', type: 'keyword', desc: 'Function Definition' },
+      { token: 'class', type: 'keyword', desc: 'Class Definition' },
+      { token: 'return', type: 'keyword', desc: 'Return Statement' },
+      { token: 'if', type: 'keyword', desc: 'Conditional If' },
+      { token: 'for', type: 'keyword', desc: 'For Loop' },
+      { token: 'while', type: 'keyword', desc: 'While Loop' },
+      { token: 'import', type: 'keyword', desc: 'Module Import' },
+    ],
+  },
+  {
+    category: 'JavaScript & Web',
+    tokens: [
+      { token: 'function', type: 'keyword', desc: 'JS Function' },
+      { token: 'const', type: 'keyword', desc: 'Constant Variable' },
+      { token: 'let', type: 'keyword', desc: 'Block Scoped Variable' },
+      { token: 'async', type: 'keyword', desc: 'Asynchronous Function' },
+      { token: 'await', type: 'keyword', desc: 'Await Promise' },
+    ],
+  },
+  {
     category: 'Braces & Brackets',
     tokens: [
       { token: '{', type: 'operator', desc: 'Open Curly Brace' },
@@ -39,26 +63,35 @@ const PRESET_CATEGORIES: DefaultTokenCategory[] = [
     ],
   },
   {
+    category: 'Operators & Arrows',
+    tokens: [
+      { token: '=>', type: 'operator', desc: 'Arrow Function' },
+      { token: '->', type: 'operator', desc: 'Return Type Arrow' },
+      { token: '==', type: 'operator', desc: 'Equality Operator' },
+      { token: '!=', type: 'operator', desc: 'Not Equal' },
+      { token: '=', type: 'operator', desc: 'Assignment Operator' },
+      { token: '+', type: 'operator', desc: 'Plus Operator' },
+      { token: '//', type: 'comment', desc: 'Comment Slashes' },
+      { token: '#', type: 'comment', desc: 'Hash Comment' },
+    ],
+  },
+  {
     category: 'HTML & XML Tags',
     tokens: [
       { token: '<', type: 'tag', desc: 'Left Angle Bracket' },
       { token: '>', type: 'tag', desc: 'Right Angle Bracket' },
+      { token: '</', type: 'tag', desc: 'Closing Tag Prefix' },
       { token: '<div>', type: 'tag', desc: 'Div Element' },
       { token: '</div>', type: 'tag', desc: 'Closing Div' },
       { token: '<span>', type: 'tag', desc: 'Span Element' },
-      { token: '</p>', type: 'tag', desc: 'Closing Paragraph' },
     ],
   },
   {
-    category: 'Keywords & Operators',
+    category: 'Values & Booleans',
     tokens: [
-      { token: 'def', type: 'keyword', desc: 'Python Function Def' },
-      { token: 'class', type: 'keyword', desc: 'Class Keyword' },
-      { token: 'return', type: 'keyword', desc: 'Return Statement' },
-      { token: 'function', type: 'keyword', desc: 'JS Function' },
-      { token: '=>', type: 'operator', desc: 'Arrow Function' },
-      { token: '//', type: 'comment', desc: 'Comment Slashes' },
-      { token: '#', type: 'comment', desc: 'Python Hash Comment' },
+      { token: 'true', type: 'boolean', desc: 'Boolean True' },
+      { token: 'false', type: 'boolean', desc: 'Boolean False' },
+      { token: 'null', type: 'boolean', desc: 'Null / None Value' },
     ],
   },
 ];
@@ -86,9 +119,11 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
     token: string;
     type: SyntaxTokenType;
     confidence: number;
+    isCustom?: boolean;
   } | null>(null);
 
   const isDark = theme === 'blackboard' || theme === 'chalkboard';
+  const palette = SYNTAX_PALETTE[theme] || SYNTAX_PALETTE.blackboard;
 
   const refreshSamples = useCallback(() => {
     setSamples(trainer.getSamples());
@@ -137,57 +172,55 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
     target.setPointerCapture(e.pointerId);
     const rect = target.getBoundingClientRect();
 
-    const builder = new StrokeBuilder('train_page', 'pen', '#c084fc', 4);
-    builder.addCoalescedEvents(e.nativeEvent, rect, { x: 0, y: 0, zoom: 1 });
+    const strokeColor = palette[selectedTokenType] || '#c084fc';
+    const builder = new StrokeBuilder('train_page', 'pen', strokeColor, 4);
+    builder.addPointFromEvent(e.nativeEvent, rect, { x: 0, y: 0, zoom: 1 });
+
     activeBuilderRef.current = builder;
     isDrawingRef.current = true;
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawingRef.current || !activeBuilderRef.current) return;
-    const target = e.currentTarget;
-    const rect = target.getBoundingClientRect();
-    activeBuilderRef.current.addCoalescedEvents(e.nativeEvent, rect, { x: 0, y: 0, zoom: 1 });
+    const rect = e.currentTarget.getBoundingClientRect();
+    activeBuilderRef.current.addPointFromEvent(e.nativeEvent, rect, { x: 0, y: 0, zoom: 1 });
 
-    // Live preview
+    // Draw active stroke on canvas live
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        redrawTrainingCanvas();
-        const pts = activeBuilderRef.current.getPoints();
-        Smoother.renderStroke(ctx, pts, 'pen', '#c084fc', 4);
+        const strokeColor = palette[selectedTokenType] || '#c084fc';
+        const livePts = activeBuilderRef.current.getPoints();
+        if (livePts.length >= 2) {
+          Smoother.renderStroke(ctx, livePts, 'pen', strokeColor, 4);
+        }
       }
     }
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawingRef.current || !activeBuilderRef.current) return;
-    const target = e.currentTarget;
     try {
-      if (target.hasPointerCapture(e.pointerId)) {
-        target.releasePointerCapture(e.pointerId);
-      }
+      e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {}
 
-    const rect = target.getBoundingClientRect();
-    activeBuilderRef.current.addCoalescedEvents(e.nativeEvent, rect, { x: 0, y: 0, zoom: 1 });
-    const finalStroke = activeBuilderRef.current.build();
-
-    activeBuilderRef.current = null;
+    const completed = activeBuilderRef.current.build();
     isDrawingRef.current = false;
+    activeBuilderRef.current = null;
 
-    if (finalStroke) {
-      const nextList = [...recordedStrokes, finalStroke];
-      setRecordedStrokes(nextList);
+    if (completed) {
+      const nextStrokes = [...recordedStrokes, completed];
+      setRecordedStrokes(nextStrokes);
 
-      // Real-time live classification test
-      const match = trainer.classify(nextList, 0.35);
+      // Perform live classification test on input
+      const match = trainer.classify(nextStrokes, 0.40);
       if (match) {
         setTestResult({
           token: match.token,
           type: match.type,
           confidence: Math.round(match.score * 100),
+          isCustom: match.isCustom,
         });
       } else {
         setTestResult(null);
@@ -195,7 +228,7 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
     }
   };
 
-  // Save current drawing as a training sample for the active token
+  // Save new sample
   const handleSaveSample = () => {
     if (recordedStrokes.length === 0) return;
     trainer.addSample(selectedToken, selectedTokenType, recordedStrokes);
@@ -209,10 +242,20 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
     refreshSamples();
   };
 
+  // Reset to factory predefined
+  const handleResetToPredefined = () => {
+    if (window.confirm('Reset all models to factory predefined defaults? This will remove custom training samples.')) {
+      trainer.resetToPredefined();
+      refreshSamples();
+      clearTrainingCanvas();
+    }
+  };
+
   // Add custom token
   const handleAddCustomToken = () => {
     if (!customInput.trim()) return;
-    setSelectedToken(customInput.trim());
+    const clean = customInput.trim();
+    setSelectedToken(clean);
     setSelectedTokenType('keyword');
     setCustomInput('');
   };
@@ -220,6 +263,8 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
   if (!isOpen) return null;
 
   const currentTokenSamples = samples.filter(s => s.token === selectedToken);
+  const customSamplesCount = samples.filter(s => !s.isPredefined).length;
+  const predefinedSamplesCount = samples.filter(s => s.isPredefined).length;
 
   return (
     <div
@@ -242,13 +287,14 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
             </div>
             <div>
               <h2 className="text-lg font-bold flex items-center gap-2">
-                Handwriting Model Trainer Studio
-                <span className="text-[11px] font-mono font-medium px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30">
-                  Custom AI
+                Handwriting Recognition & Syntax Model Studio
+                <span className="text-[11px] font-mono font-medium px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                  <ShieldCheck className="w-3 h-3" />
+                  Predefined Ready
                 </span>
               </h2>
               <p className="text-xs opacity-60">
-                Train curly braces, HTML tags, brackets, and code keywords to recognize your natural handwriting.
+                Predefined models are active for all languages out of the box. Train your personal handwriting style anytime for extra precision.
               </p>
             </div>
           </div>
@@ -263,61 +309,82 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
         {/* Studio Body */}
         <div className="flex-1 flex overflow-hidden">
           {/* Left Sidebar: Tokens to Train */}
-          <div className="w-72 border-r border-current/10 p-4 flex flex-col gap-4 overflow-y-auto bg-black/5 dark:bg-white/5">
-            <div>
+          <div className="w-80 border-r border-current/10 p-4 flex flex-col gap-4 overflow-y-auto bg-black/5 dark:bg-white/5">
+            <div className="flex items-center justify-between">
               <label className="text-xs font-semibold uppercase tracking-wider opacity-70">
-                Select Token to Train
+                Available Tokens
               </label>
-              <div className="mt-2 space-y-4">
-                {PRESET_CATEGORIES.map(cat => (
-                  <div key={cat.category}>
-                    <span className="text-[11px] font-mono text-purple-400 font-semibold">
-                      {cat.category}
-                    </span>
-                    <div className="grid grid-cols-2 gap-1.5 mt-1">
-                      {cat.tokens.map(t => {
-                        const count = samples.filter(s => s.token === t.token).length;
-                        const isSelected = selectedToken === t.token;
-                        return (
-                          <button
-                            key={t.token}
-                            onClick={() => {
-                              setSelectedToken(t.token);
-                              setSelectedTokenType(t.type);
-                              clearTrainingCanvas();
-                            }}
-                            className={`px-3 py-2 rounded-xl font-mono text-xs font-bold flex items-center justify-between border transition-all ${
-                              isSelected
-                                ? 'bg-purple-600 text-white border-purple-500 shadow-md shadow-purple-500/30 scale-[1.02]'
-                                : 'bg-black/5 dark:bg-white/5 border-current/10 opacity-80 hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10'
-                            }`}
-                          >
-                            <span className="text-sm">{t.token}</span>
-                            <span
-                              className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                                count > 0 ? 'bg-emerald-500/25 text-emerald-300' : 'opacity-40'
-                              }`}
-                            >
-                              {count}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
+              <button
+                onClick={handleResetToPredefined}
+                title="Reset all to factory predefined defaults"
+                className="text-[10px] flex items-center gap-1 text-purple-400 hover:text-purple-300 opacity-80 hover:opacity-100 transition-opacity"
+              >
+                <RefreshCw className="w-2.5 h-2.5" />
+                Reset Factory Defaults
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {PRESET_CATEGORIES.map(cat => (
+                <div key={cat.category}>
+                  <span className="text-[11px] font-mono text-purple-400 font-semibold">
+                    {cat.category}
+                  </span>
+                  <div className="grid grid-cols-2 gap-1.5 mt-1">
+                    {cat.tokens.map(t => {
+                      const tokenSamples = samples.filter(s => s.token === t.token);
+                      const hasPredefined = tokenSamples.some(s => s.isPredefined);
+                      const customCount = tokenSamples.filter(s => !s.isPredefined).length;
+                      const isSelected = selectedToken === t.token;
+
+                      return (
+                        <button
+                          key={t.token}
+                          onClick={() => {
+                            setSelectedToken(t.token);
+                            setSelectedTokenType(t.type);
+                            clearTrainingCanvas();
+                          }}
+                          className={`px-2.5 py-2 rounded-xl font-mono text-xs font-bold flex items-center justify-between border transition-all ${
+                            isSelected
+                              ? 'bg-purple-600 text-white border-purple-500 shadow-md shadow-purple-500/30 scale-[1.02]'
+                              : 'bg-black/5 dark:bg-white/5 border-current/10 opacity-80 hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10'
+                          }`}
+                        >
+                          <span className="truncate mr-1">{t.token}</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {hasPredefined && (
+                              <span
+                                title="Predefined built-in model active"
+                                className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"
+                              />
+                            )}
+                            {customCount > 0 && (
+                              <span
+                                title={`${customCount} custom user sample(s) trained`}
+                                className="text-[9px] px-1 py-0.2 rounded-full bg-purple-500/40 text-purple-200 border border-purple-400/40 font-mono"
+                              >
+                                +{customCount}
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </div>
 
             {/* Custom Token Adder */}
             <div className="pt-3 border-t border-current/10">
               <label className="text-[11px] font-mono uppercase tracking-wider opacity-70">
-                Add Custom Symbol / Word
+                Train Any Custom Symbol / Keyword
               </label>
               <div className="flex gap-1.5 mt-1.5">
                 <input
                   type="text"
-                  placeholder="e.g. [ ], !=, await"
+                  placeholder="e.g. static, async, =>"
                   value={customInput}
                   onChange={e => setCustomInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleAddCustomToken()}
@@ -334,41 +401,53 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
           </div>
 
           {/* Center & Right: Drawing Pad & Trained Samples */}
-          <div className="flex-1 p-6 flex flex-col gap-5 overflow-y-auto">
-            {/* Active Training Banner */}
+          <div className="flex-1 p-6 flex flex-col gap-4 overflow-y-auto">
+            {/* Active Training Status Banner */}
             <div className="flex items-center justify-between p-4 rounded-2xl bg-purple-500/10 border border-purple-500/20">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-xl bg-purple-600/30 border border-purple-500/40 flex items-center justify-center font-mono text-2xl font-bold text-purple-300">
                   {selectedToken}
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm">
-                    Training Token: <span className="font-mono text-purple-400">{selectedToken}</span>
+                  <h3 className="font-bold text-sm flex items-center gap-2">
+                    Token: <span className="font-mono text-purple-400">{selectedToken}</span>
+                    <span
+                      className="text-[10px] font-mono px-2 py-0.5 rounded-md text-white font-semibold"
+                      style={{ backgroundColor: palette[selectedTokenType] || '#7c3aed' }}
+                    >
+                      {selectedTokenType}
+                    </span>
                   </h3>
-                  <p className="text-xs opacity-70">
-                    Draw this symbol 2 to 4 times below as you naturally write it on the board.
+                  <p className="text-xs opacity-70 mt-0.5">
+                    {currentTokenSamples.some(s => s.isPredefined)
+                      ? 'Predefined built-in template is active. Draw below if you want to teach your specific handwriting.'
+                      : 'Draw this symbol 1 to 3 times below to register your handwriting.'}
                   </p>
                 </div>
               </div>
               <div className="text-right font-mono text-xs">
-                <span className="text-emerald-400 font-bold">{currentTokenSamples.length}</span> / 3 samples recorded
+                <span className="text-emerald-400 font-bold">
+                  {currentTokenSamples.filter(s => !s.isPredefined).length}
+                </span>{' '}
+                custom samples
               </div>
             </div>
 
             {/* Interactive Drawing Pad */}
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between text-xs font-medium opacity-80">
-                <span>Draw your sample in the pad below:</span>
+                <span>Draw your symbol / keyword below:</span>
                 {testResult && (
-                  <span className="font-mono text-purple-400 flex items-center gap-1.5 animate-in fade-in">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    Live Match: <strong>{testResult.token}</strong> ({testResult.confidence}% confidence)
+                  <span className="font-mono text-purple-400 flex items-center gap-1.5 animate-in fade-in bg-purple-500/15 px-2.5 py-1 rounded-lg border border-purple-500/30">
+                    <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                    Recognized: <strong>{testResult.token}</strong> ({testResult.confidence}% match)
+                    {testResult.isCustom && <span className="text-[10px] text-emerald-400 font-sans">(Custom Trained)</span>}
                   </span>
                 )}
               </div>
 
               <div
-                className={`relative h-64 rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden touch-none ${
+                className={`relative h-60 rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden touch-none ${
                   isDark
                     ? 'bg-slate-950/80 border-purple-500/30 shadow-inner'
                     : 'bg-slate-50 border-purple-500/30 shadow-inner'
@@ -384,14 +463,14 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
                 {recordedStrokes.length === 0 && (
                   <div className="absolute pointer-events-none text-center opacity-30 select-none">
                     <span className="text-3xl font-mono block font-bold">{selectedToken}</span>
-                    <span className="text-xs">Draw here using pen or mouse</span>
+                    <span className="text-xs">Draw here with pen or mouse</span>
                   </div>
                 )}
 
                 <canvas
                   ref={canvasRef}
                   width={600}
-                  height={256}
+                  height={240}
                   onPointerDown={handlePointerDown}
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
@@ -419,61 +498,71 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
                   }`}
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  Save Sample ({currentTokenSamples.length + 1})
+                  Save Custom Handwriting Sample
                 </button>
               </div>
             </div>
 
-            {/* Recorded Samples for this Token */}
-            <div className="pt-3 border-t border-current/10">
+            {/* Registered Samples for this Token */}
+            <div className="pt-2 border-t border-current/10">
               <h4 className="text-xs font-semibold uppercase tracking-wider opacity-70 mb-2">
-                Recorded Samples for &apos;{selectedToken}&apos; ({currentTokenSamples.length})
+                Templates & Samples for &apos;{selectedToken}&apos; ({currentTokenSamples.length})
               </h4>
-              {currentTokenSamples.length === 0 ? (
-                <p className="text-xs opacity-40 italic">
-                  No samples recorded yet for {selectedToken}. Draw one above to train!
-                </p>
-              ) : (
-                <div className="grid grid-cols-4 gap-3">
-                  {currentTokenSamples.map((sample, idx) => (
-                    <div
-                      key={sample.id}
-                      className="p-3 rounded-xl border border-current/15 bg-black/5 dark:bg-white/5 flex items-center justify-between group"
-                    >
-                      <div>
-                        <span className="text-xs font-mono font-bold">Sample #{idx + 1}</span>
-                        <span className="text-[10px] block opacity-50 font-mono">
-                          {sample.strokeCount} stroke(s)
-                        </span>
-                      </div>
+              <div className="grid grid-cols-3 gap-2.5">
+                {currentTokenSamples.map((sample, idx) => (
+                  <div
+                    key={sample.id}
+                    className={`p-3 rounded-xl border flex items-center justify-between group ${
+                      sample.isPredefined
+                        ? 'border-emerald-500/30 bg-emerald-500/10'
+                        : 'border-purple-500/30 bg-purple-500/10'
+                    }`}
+                  >
+                    <div>
+                      <span className="text-xs font-mono font-bold flex items-center gap-1">
+                        {sample.isPredefined ? (
+                          <>
+                            <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                            Predefined
+                          </>
+                        ) : (
+                          `Sample #${idx + 1}`
+                        )}
+                      </span>
+                      <span className="text-[10px] block opacity-60 font-mono">
+                        {sample.strokeCount || 1} stroke(s) • ratio: {Math.round((sample.aspectRatio || 1) * 10) / 10}
+                      </span>
+                    </div>
+
+                    {!sample.isPredefined && (
                       <button
                         onClick={() => handleDeleteSample(sample.id)}
                         className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/20 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Delete sample"
+                        title="Delete custom sample"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
 
         {/* Footer */}
         <div className="px-6 py-3.5 border-t border-current/10 flex items-center justify-between bg-black/5 dark:bg-white/5">
-          <div className="flex items-center gap-2 text-xs opacity-60">
+          <div className="flex items-center gap-3 text-xs opacity-75">
             <Layers className="w-4 h-4 text-purple-400" />
             <span>
-              Total Model Samples: <strong>{samples.length}</strong> (Saved automatically to local disk)
+              Predefined Templates: <strong className="text-emerald-400">{predefinedSamplesCount}</strong> • Custom User Samples: <strong className="text-purple-400">{customSamplesCount}</strong>
             </span>
           </div>
           <button
             onClick={onClose}
             className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs shadow-md shadow-purple-500/25"
           >
-            Done & Apply Model
+            Done & Return to Board
           </button>
         </div>
       </div>

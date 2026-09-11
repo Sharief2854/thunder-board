@@ -7,6 +7,7 @@ import { StrokeBuilder } from '../../core/inking/StrokeBuilder';
 import { Viewport } from '../../core/canvas/Viewport';
 import { CanvasController } from '../../core/canvas/CanvasController';
 import { ShapeGenerator } from '../../core/shapes/ShapeGenerator';
+import { StorageManager } from '../../core/storage/StorageManager';
 
 interface WhiteboardCanvasProps {
   pageId: string;
@@ -16,6 +17,8 @@ interface WhiteboardCanvasProps {
   currentWidth: number;
   strokes: Stroke[];
   onStrokeComplete: (stroke: Stroke) => void;
+  onEraseStrokes?: (strokeIds: string[]) => void;
+  onEraseEnd?: () => void;
   onSelectColor?: (color: string) => void;
   transform: ViewportTransform;
   onTransformChange: (transform: ViewportTransform) => void;
@@ -24,7 +27,30 @@ interface WhiteboardCanvasProps {
   isAutoSnapEnabled?: boolean;
 }
 
-export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
+// Squared distance from point (px, py) to line segment (ax, ay) -> (bx, by)
+function distToSegmentSquared(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const l2 = dx * dx + dy * dy;
+  if (l2 === 0) {
+    const dpx = px - ax;
+    const dpy = py - ay;
+    return dpx * dpx + dpy * dpy;
+  }
+  let t = ((px - ax) * dx + (py - ay) * dy) / l2;
+  t = Math.max(0, Math.min(1, t));
+  const projX = ax + t * dx;
+  const projY = ay + t * dy;
+  const ex = px - projX;
+  const ey = py - projY;
+  return ex * ex + ey * ey;
+}
+
+const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
   pageId,
   theme,
   currentTool,
@@ -32,6 +58,8 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   currentWidth,
   strokes,
   onStrokeComplete,
+  onEraseStrokes,
+  onEraseEnd,
   onSelectColor,
   transform,
   onTransformChange,
@@ -56,18 +84,33 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     transformY: 0,
   });
 
+  // Multi-Touch Screen Tracking (Two-finger pan and pinch-to-zoom)
+  const activePointersRef = useRef<Map<number, { x: number; y: number; pointerType: string }>>(new Map());
+  const isTwoFingerGestureRef = useRef<boolean>(false);
+  const twoFingerStartRef = useRef<{
+    midX: number;
+    midY: number;
+    dist: number;
+    anchorWorld: { x: number; y: number };
+    startTransform: ViewportTransform;
+  }>({
+    midX: 0,
+    midY: 0,
+    dist: 1,
+    anchorWorld: { x: 0, y: 0 },
+    startTransform: { x: 0, y: 0, zoom: 1 },
+  });
+  const touchCooldownUntilRef = useRef<number>(0);
+
   const lastReportedSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
   const onCanvasSizeChangeRef = useRef(onCanvasSizeChange);
   onCanvasSizeChangeRef.current = onCanvasSizeChange;
 
   const [isSpacePressed, setIsSpacePressed] = useState(false);
 
-  // Dynamic Pointer Reticle tracking
-  const [pointerPos, setPointerPos] = useState<{ x: number; y: number; visible: boolean }>({
-    x: 0,
-    y: 0,
-    visible: false,
-  });
+  // Dynamic Pointer Reticle DOM ref (Zero-re-render high-frequency tracking)
+  const reticleRef = useRef<HTMLDivElement>(null);
+  const rafActiveStrokeRef = useRef<number | null>(null);
 
   // Long-Press Quick Color Picker State
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -77,6 +120,69 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     y: 0,
     isOpen: false,
   });
+
+  // Real-Time Eraser Tracking State
+  const isErasingRef = useRef<boolean>(false);
+  const erasedInGestureRef = useRef<Set<string>>(new Set());
+
+  // Erase strokes intersecting the circular eraser area in real-time with sub-millisecond precision
+  const eraseStrokesAtPoint = useCallback((worldX: number, worldY: number, radius: number) => {
+    if (!onEraseStrokes) return;
+
+    const hitIds: string[] = [];
+
+    for (const stroke of strokes) {
+      if (stroke.isErased || erasedInGestureRef.current.has(stroke.id)) continue;
+
+      // Fast bounding-box rejection
+      const box = stroke.boundingBox;
+      if (box) {
+        if (
+          worldX < box.minX - radius ||
+          worldX > box.maxX + radius ||
+          worldY < box.minY - radius ||
+          worldY > box.maxY + radius
+        ) {
+          continue;
+        }
+      }
+
+      // Precise segment-level distance check
+      const effectiveRadiusSq = (radius + stroke.width / 2) ** 2;
+      let hit = false;
+      const pts = stroke.points;
+
+      if (pts.length <= 1) {
+        if (pts.length === 1) {
+          const d2 = (worldX - pts[0].x) ** 2 + (worldY - pts[0].y) ** 2;
+          hit = d2 <= effectiveRadiusSq;
+        }
+      } else {
+        for (let i = 0; i < pts.length - 1; i++) {
+          const d2 = distToSegmentSquared(worldX, worldY, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
+          if (d2 <= effectiveRadiusSq) {
+            hit = true;
+            break;
+          }
+        }
+      }
+
+      if (!hit && stroke.shapeData) {
+        const { start, end } = stroke.shapeData;
+        const d2 = distToSegmentSquared(worldX, worldY, start.x, start.y, end.x, end.y);
+        hit = d2 <= effectiveRadiusSq;
+      }
+
+      if (hit) {
+        hitIds.push(stroke.id);
+        erasedInGestureRef.current.add(stroke.id);
+      }
+    }
+
+    if (hitIds.length > 0) {
+      onEraseStrokes(hitIds);
+    }
+  }, [onEraseStrokes, strokes]);
 
   const themeConfig = theme === 'whiteboard' ? WHITEBOARD_THEME : BLACKBOARD_THEME;
 
@@ -236,6 +342,15 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     Smoother.renderStroke(ctx, points, activeTool, currentColor, currentWidth);
   }, [currentColor, currentWidth, transform]);
 
+  // RequestAnimationFrame scheduler for ultra-smooth 120fps live drawing
+  const scheduleDrawActiveStroke = useCallback(() => {
+    if (rafActiveStrokeRef.current !== null) return;
+    rafActiveStrokeRef.current = requestAnimationFrame(() => {
+      rafActiveStrokeRef.current = null;
+      drawActiveStroke();
+    });
+  }, [drawActiveStroke]);
+
   // Resize All Canvases to High-DPI DPR
   const resizeCanvases = useCallback(() => {
     const container = containerRef.current;
@@ -336,6 +451,85 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
       return;
     }
 
+    // Record this pointer in active pointer tracker
+    activePointersRef.current.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY,
+      pointerType: e.pointerType,
+    });
+
+    // Palm rejection: If an active stylus pen is drawing, ignore simultaneous palm touches
+    const hasActiveStylus = Array.from(activePointersRef.current.values()).some(
+      p => p.pointerType === 'pen'
+    );
+    if (hasActiveStylus && e.pointerType === 'touch') {
+      return;
+    }
+
+    // Post-gesture cooldown: prevent accidental touch marks right after lifting two fingers
+    if (e.pointerType === 'touch' && Date.now() < touchCooldownUntilRef.current) {
+      return;
+    }
+
+    // MULTI-TOUCH GESTURE DETECTION: 2 or more touch pointers active
+    const touchPointers = Array.from(activePointersRef.current.values()).filter(
+      p => p.pointerType === 'touch'
+    );
+
+    if (touchPointers.length >= 2) {
+      // Immediately abort any in-flight drawing started by the first finger
+      if (isDrawingRef.current || activeBuilderRef.current) {
+        const scratchCanvas = scratchCanvasRef.current;
+        if (scratchCanvas) {
+          const ctx = scratchCanvas.getContext('2d');
+          if (ctx) {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
+          }
+        }
+        isDrawingRef.current = false;
+        activeBuilderRef.current = null;
+      }
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      if (isDrawingShapeRef.current) {
+        isDrawingShapeRef.current = false;
+        shapeStartRef.current = null;
+      }
+      if (reticleRef.current) {
+        reticleRef.current.style.display = 'none';
+      }
+
+      // Initialize two-finger gesture state
+      const p1 = touchPointers[0];
+      const p2 = touchPointers[1];
+      const midX = (p1.x + p2.x) / 2;
+      const midY = (p1.y + p2.y) / 2;
+      const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+
+      const container = containerRef.current;
+      const rect = container ? container.getBoundingClientRect() : { left: 0, top: 0 };
+      const screenX = midX - rect.left;
+      const screenY = midY - rect.top;
+      const anchorWorld = Viewport.screenToWorld(screenX, screenY, transform);
+
+      isTwoFingerGestureRef.current = true;
+      twoFingerStartRef.current = {
+        midX,
+        midY,
+        dist: Math.max(dist, 10),
+        anchorWorld,
+        startTransform: { ...transform },
+      };
+
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
+      return;
+    }
+
     const isPanAction = isSpacePressed || e.button === 1 || currentTool === 'pan';
 
     if (isPanAction) {
@@ -346,7 +540,9 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
         transformX: transform.x,
         transformY: transform.y,
       };
-      e.currentTarget.setPointerCapture(e.pointerId);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
       return;
     }
 
@@ -354,17 +550,27 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     if (e.button !== 0 && e.button !== 5 && e.pointerType === 'mouse') return;
 
     const target = e.currentTarget;
-    target.setPointerCapture(e.pointerId);
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {}
 
     const rect = target.getBoundingClientRect();
     const localX = e.clientX - rect.left;
     const localY = e.clientY - rect.top;
-    setPointerPos({ x: localX, y: localY, visible: true });
+    if (reticleRef.current) {
+      if (e.pointerType === 'touch') {
+        reticleRef.current.style.display = 'none';
+      } else {
+        reticleRef.current.style.display = 'flex';
+        reticleRef.current.style.transform = `translate3d(${localX}px, ${localY}px, 0) translate(-50%, -50%)`;
+      }
+    }
 
     // If current tool is shape, start shape drawing
     if (currentTool === 'shape') {
       isDrawingShapeRef.current = true;
       shapeStartRef.current = Viewport.screenToWorld(localX, localY, transform);
+      StorageManager.setDrawingActive(true);
       return;
     }
 
@@ -377,19 +583,30 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
 
     const activeToolForStroke = isHardwareEraser ? 'stroke-eraser' : currentTool;
 
+    // Real-Time Smooth Eraser: Erase strokes continuously under the reticle without drawing lines
+    if (activeToolForStroke === 'stroke-eraser') {
+      isErasingRef.current = true;
+      StorageManager.setDrawingActive(true);
+      erasedInGestureRef.current.clear();
+      const world = Viewport.screenToWorld(localX, localY, transform);
+      const eraserRadius = Math.max(14, (currentWidth * 2.5) / transform.zoom);
+      eraseStrokesAtPoint(world.x, world.y, eraserRadius);
+      return;
+    }
+
     // Setup Long-Press Color Change Trigger (450ms hold) - only for drawing pens
     if (!isHardwareEraser && (activeToolForStroke === 'pen' || activeToolForStroke === 'pencil' || activeToolForStroke === 'highlighter')) {
       longPressStartRef.current = { x: localX, y: localY };
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
 
       longPressTimerRef.current = setTimeout(() => {
-        // Trainer held pen down in place: trigger Quick Color Radial Menu!
         const scratchCanvas = scratchCanvasRef.current;
         if (scratchCanvas) {
           const ctx = scratchCanvas.getContext('2d');
           ctx?.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
         }
         isDrawingRef.current = false;
+        StorageManager.setDrawingActive(false);
         activeBuilderRef.current = null;
         try {
           if (target.hasPointerCapture(e.pointerId)) {
@@ -407,19 +624,82 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
 
     activeBuilderRef.current = builder;
     isDrawingRef.current = true;
+    StorageManager.setDrawingActive(true);
 
     // Render first point immediately
     drawActiveStroke();
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Keep pointer coordinates updated in active map
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, {
+        x: e.clientX,
+        y: e.clientY,
+        pointerType: e.pointerType,
+      });
+    }
+
+    // TWO-FINGER TOUCHSCREEN PAN & PINCH-ZOOM GESTURE
+    if (isTwoFingerGestureRef.current) {
+      const touchPointers = Array.from(activePointersRef.current.values()).filter(
+        p => p.pointerType === 'touch'
+      );
+      if (touchPointers.length >= 2) {
+        const p1 = touchPointers[0];
+        const p2 = touchPointers[1];
+        const curMidX = (p1.x + p2.x) / 2;
+        const curMidY = (p1.y + p2.y) / 2;
+        const curDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+
+        const { dist: startDist, anchorWorld, startTransform } = twoFingerStartRef.current;
+
+        // Smooth pinch zoom scale calculation
+        const scale = curDist / startDist;
+        const newZoom = Math.min(
+          CanvasController.MAX_ZOOM,
+          Math.max(CanvasController.MIN_ZOOM, startTransform.zoom * scale)
+        );
+
+        // Pan translation anchored at the world point under midpoint
+        const curScreenX = curMidX - rect.left;
+        const curScreenY = curMidY - rect.top;
+
+        const newX = curScreenX - anchorWorld.x * newZoom;
+        const newY = curScreenY - anchorWorld.y * newZoom;
+
+        onTransformChange({
+          x: Math.round(newX * 10) / 10,
+          y: Math.round(newY * 10) / 10,
+          zoom: Math.round(newZoom * 1000) / 1000,
+        });
+      }
+      return;
+    }
+
+    // Ignore single-finger touch moves during cooldown
+    if (e.pointerType === 'touch' && Date.now() < touchCooldownUntilRef.current) {
+      return;
+    }
+
     const target = e.currentTarget;
     const rect = target.getBoundingClientRect();
     const localX = e.clientX - rect.left;
     const localY = e.clientY - rect.top;
 
-    // Update real-time brush pointer position relative to canvas container
-    setPointerPos({ x: localX, y: localY, visible: true });
+    // Update real-time brush pointer position directly on DOM (0 React re-renders)
+    if (reticleRef.current) {
+      if (e.pointerType === 'touch') {
+        reticleRef.current.style.display = 'none';
+      } else {
+        reticleRef.current.style.display = 'flex';
+        reticleRef.current.style.transform = `translate3d(${localX}px, ${localY}px, 0) translate(-50%, -50%)`;
+      }
+    }
 
     // Live preview when drawing shapes
     if (isDrawingShapeRef.current && shapeStartRef.current) {
@@ -475,15 +755,57 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
       return;
     }
 
+    // Handle Real-Time Eraser Swiping
+    if (isErasingRef.current) {
+      const eraserRadius = Math.max(14, (currentWidth * 2.5) / transform.zoom);
+      const native = e.nativeEvent as any;
+      if (typeof native.getCoalescedEvents === 'function') {
+        const coalesced = native.getCoalescedEvents();
+        if (coalesced && coalesced.length > 0) {
+          for (const ce of coalesced) {
+            const cWorld = Viewport.screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, transform);
+            eraseStrokesAtPoint(cWorld.x, cWorld.y, eraserRadius);
+          }
+          return;
+        }
+      }
+      const world = Viewport.screenToWorld(localX, localY, transform);
+      eraseStrokesAtPoint(world.x, world.y, eraserRadius);
+      StorageManager.recordDrawingActivity();
+      return;
+    }
+
     if (!isDrawingRef.current || !activeBuilderRef.current) return;
 
+    StorageManager.recordDrawingActivity();
     activeBuilderRef.current.addCoalescedEvents(e.nativeEvent, rect, transform);
 
-    // DIRECT, IMMEDIATE DRAWING
-    drawActiveStroke();
+    // Ultra-responsive 120fps display-synchronized live drawing (eliminates event queue lag)
+    scheduleDrawActiveStroke();
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Remove pointer from tracking map
+    activePointersRef.current.delete(e.pointerId);
+
+    // If we were in a two-finger gesture, exit gesture cleanly without committing any stroke
+    if (isTwoFingerGestureRef.current) {
+      const remainingTouches = Array.from(activePointersRef.current.values()).filter(
+        p => p.pointerType === 'touch'
+      );
+      if (remainingTouches.length < 2) {
+        isTwoFingerGestureRef.current = false;
+        // Cooldown prevents the remaining finger from accidentally drawing a dot
+        touchCooldownUntilRef.current = Date.now() + 300;
+      }
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {}
+      return;
+    }
+
     // Cancel any pending long press
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
@@ -528,6 +850,8 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
         onStrokeComplete(shapeStroke);
       }
       shapeStartRef.current = null;
+      StorageManager.setDrawingActive(false);
+      StorageManager.recordDrawingActivity();
       return;
     }
 
@@ -543,7 +867,28 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
       return;
     }
 
+    // Complete Real-Time Eraser Gesture
+    if (isErasingRef.current) {
+      isErasingRef.current = false;
+      erasedInGestureRef.current.clear();
+      onEraseEnd?.();
+      StorageManager.setDrawingActive(false);
+      StorageManager.recordDrawingActivity();
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {}
+      return;
+    }
+
     if (!isDrawingRef.current || !activeBuilderRef.current) return;
+
+    // Cancel pending animation frame
+    if (rafActiveStrokeRef.current !== null) {
+      cancelAnimationFrame(rafActiveStrokeRef.current);
+      rafActiveStrokeRef.current = null;
+    }
 
     const target = e.currentTarget;
     try {
@@ -571,6 +916,8 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
 
     activeBuilderRef.current = null;
     isDrawingRef.current = false;
+    StorageManager.setDrawingActive(false);
+    StorageManager.recordDrawingActivity();
 
     if (finalizedStroke) {
       // Auto-Snap rough handwriting into perfect geometric shapes when enabled
@@ -595,12 +942,28 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
   };
 
   const handlePointerCancel = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    activePointersRef.current.delete(e.pointerId);
+    if (isTwoFingerGestureRef.current) {
+      const remainingTouches = Array.from(activePointersRef.current.values()).filter(
+        p => p.pointerType === 'touch'
+      );
+      if (remainingTouches.length < 2) {
+        isTwoFingerGestureRef.current = false;
+        touchCooldownUntilRef.current = Date.now() + 300;
+      }
+    }
+    StorageManager.setDrawingActive(false);
+    StorageManager.recordDrawingActivity();
     handlePointerUp(e);
   };
 
   const handlePointerLeave = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    setPointerPos(p => ({ ...p, visible: false }));
-    handlePointerCancel(e);
+    if (reticleRef.current) {
+      reticleRef.current.style.display = 'none';
+    }
+    if (e.pointerType !== 'mouse') {
+      handlePointerCancel(e);
+    }
   };
 
   const handleSelectColorFromRadial = (newColor: string) => {
@@ -629,7 +992,7 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     <div
       ref={containerRef}
       onWheel={handleWheel}
-      className={`relative w-full h-full overflow-hidden select-none ${getCursorClass()}`}
+      className={`relative w-full h-full overflow-hidden select-none touch-none ${getCursorClass()}`}
     >
       {/* Layer 1: Background & Grid */}
       <canvas
@@ -654,11 +1017,13 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
         className="absolute inset-0 z-20 touch-none"
       />
 
-      {/* Dynamic Pen-Size Brush Pointer Reticle */}
-      {pointerPos.visible && !isSpacePressed && currentTool !== 'pan' && (
+      {/* Dynamic Pen-Size Brush Pointer Reticle (0 React re-renders, 120fps hardware accelerated) */}
+      {!isSpacePressed && currentTool !== 'pan' && (
         <div
+          ref={reticleRef}
           style={{
-            transform: `translate3d(${pointerPos.x}px, ${pointerPos.y}px, 0) translate(-50%, -50%)`,
+            display: 'none',
+            transform: 'translate3d(-100px, -100px, 0) translate(-50%, -50%)',
             width: `${reticleDiameter}px`,
             height: `${reticleDiameter}px`,
             borderColor: currentTool === 'stroke-eraser' ? '#ef4444' : currentColor,
@@ -739,3 +1104,5 @@ export const WhiteboardCanvas: React.FC<WhiteboardCanvasProps> = ({
     </div>
   );
 };
+
+export const WhiteboardCanvas = React.memo(WhiteboardCanvasComponent);

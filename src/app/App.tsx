@@ -274,8 +274,10 @@ export const App: React.FC = () => {
 
   // Flag to prevent saving initial unpopulated load
   const isLoadedRef = useRef(false);
+  const workspaceRef = useRef<AppWorkspace>(workspace);
+  workspaceRef.current = workspace;
 
-  // Load Workspace from Local Storage / Electron on Mount
+  // Load Workspace from Storage on Mount
   useEffect(() => {
     const initLoad = async () => {
       const loaded = await StorageManager.loadWorkspace();
@@ -289,11 +291,42 @@ export const App: React.FC = () => {
     initLoad();
   }, []);
 
-  // Trigger Automatic Debounced Autosave on Any Workspace Change
+  // Trigger Draw-Aware Debounced Autosave (Never lags during active inking)
   useEffect(() => {
     if (!isLoadedRef.current) return;
-    StorageManager.scheduleAutosave(workspace, setSaveStatus, 800);
+    StorageManager.scheduleAutosave(workspace, setSaveStatus, 2000);
   }, [workspace]);
+
+  // Guaranteed Save on Window Close, Page Refresh, or App Exit
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+    };
+
+    const handlePageHide = () => {
+      StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handlePageHide);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, []);
+
+  // Dedicated App Close Handler for TitleBar Close button
+  const handleAppClose = useCallback(async () => {
+    setSaveStatus('saving');
+    await StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+    setSaveStatus('saved');
+    if (window.smartBoardAPI) {
+      window.smartBoardAPI.close();
+    } else {
+      window.close();
+    }
+  }, []);
 
   // Adapt current ink color when theme changes
   const toggleTheme = useCallback(() => {
@@ -309,13 +342,64 @@ export const App: React.FC = () => {
     });
   }, []);
 
+  // Track whether an active real-time eraser swipe is in progress (for single undo snapshot)
+  const isErasingGestureRef = useRef(false);
+
+  // Real-Time Eraser: Erases strokes instantly as the eraser crosses them with zero lag
+  const handleEraseStrokes = useCallback((strokeIds: string[]) => {
+    if (!strokeIds || strokeIds.length === 0) return;
+    const pageId = activePage.id;
+
+    setWorkspace(prev => {
+      const currentBatchObj = prev.batches.find(b => b.id === prev.activeBatchId) || prev.batches[0];
+
+      // On first stroke hit of this continuous gesture, snapshot for undo
+      if (!isErasingGestureRef.current) {
+        isErasingGestureRef.current = true;
+        const currentList = Object.values(currentBatchObj.strokes || {}).filter(
+          s => s.pageId === pageId && !s.isErased
+        );
+        setHistory(h => ({
+          ...h,
+          [pageId]: [...(h[pageId] || []), currentList],
+        }));
+        setRedoStack(r => ({
+          ...r,
+          [pageId]: [],
+        }));
+      }
+
+      const updatedStrokes = { ...(currentBatchObj.strokes || {}) };
+      let changed = false;
+      for (const id of strokeIds) {
+        if (updatedStrokes[id] && !updatedStrokes[id].isErased) {
+          updatedStrokes[id] = { ...updatedStrokes[id], isErased: true };
+          changed = true;
+        }
+      }
+
+      if (!changed) return prev;
+
+      const nextBatches = prev.batches.map(b =>
+        b.id === prev.activeBatchId
+          ? { ...b, strokes: updatedStrokes, updatedAt: Date.now() }
+          : b
+      );
+      return { ...prev, batches: nextBatches };
+    });
+  }, [activePage.id]);
+
+  const handleEraseEnd = useCallback(() => {
+    isErasingGestureRef.current = false;
+  }, []);
+
   // Commit a newly drawn stroke to active batch
   const handleStrokeComplete = useCallback(
     (stroke: Stroke) => {
       const pageId = activePage.id;
 
       if (stroke.tool === 'stroke-eraser') {
-        // Stroke eraser: erase strokes on the active page intersecting eraser bounds
+        // Fallback bounding box eraser
         setWorkspace(prev => {
           const currentBatchObj = prev.batches.find(b => b.id === prev.activeBatchId) || prev.batches[0];
           const currentList = Object.values(currentBatchObj.strokes || {}).filter(
@@ -378,14 +462,14 @@ export const App: React.FC = () => {
           [stroke.id]: stroke,
         };
 
-        // In-Place Handwritten Syntax Highlighting (Options 1, 2, 3)
+        // In-Place Handwritten Syntax Highlighting (Predefined Model + Underline + Context-Aware)
         if (isCodeHighlightActive && stroke.tool !== 'stroke-eraser') {
           const currentTheme = currentBatchObj.theme || 'blackboard';
           const pageStrokes = Object.values(updatedStrokes).filter(
             s => s.pageId === pageId && !s.isErased && s.tool !== 'stroke-eraser'
           );
 
-          // 1. Check for Underline Gesture (Option 2)
+          // 1. Check for Underline Gesture (Underline a handwritten word to highlight it)
           const underlineMatch = SyntaxHighlighterEngine.detectUnderlineGesture(stroke, pageStrokes);
           if (underlineMatch) {
             const { targetCluster } = underlineMatch;
@@ -393,7 +477,16 @@ export const App: React.FC = () => {
               .map(id => updatedStrokes[id])
               .filter(Boolean);
 
-            const detected = SyntaxHighlighterEngine.detectSymbolInStrokes(clusterStrokes) || 'keyword';
+            const contextResult = ContextAwareSyntaxEngine.analyzeWithContext(
+              targetCluster,
+              clusterStrokes,
+              pageStrokes
+            );
+            const detected =
+              contextResult?.tokenType ||
+              SyntaxHighlighterEngine.detectSymbolInStrokes(clusterStrokes) ||
+              'keyword';
+
             const palette = SyntaxHighlighterEngine.applySyntaxHighlighting(
               updatedStrokes,
               currentTheme,
@@ -401,16 +494,16 @@ export const App: React.FC = () => {
             );
             Object.assign(updatedStrokes, palette.updatedStrokes);
           } else {
-            // 2. Context-Aware Cluster Recognition & Custom Trained Model
+            // 2. High-Performance Targeted Recognition (only evaluates cluster touched by the stroke)
             const clusters = SyntaxHighlighterEngine.clusterStrokesIntoWords(pageStrokes);
-            for (const cluster of clusters) {
-              const clusterStrokes = cluster.strokeIds
+            const activeCluster = clusters.find(c => c.strokeIds.includes(stroke.id));
+            if (activeCluster) {
+              const clusterStrokes = activeCluster.strokeIds
                 .map(id => updatedStrokes[id])
                 .filter(Boolean);
 
-              // Analyze stroke using trained Point-Cloud model + Surrounding Context (neighbors, unclosed braces)
               const contextResult = ContextAwareSyntaxEngine.analyzeWithContext(
-                cluster,
+                activeCluster,
                 clusterStrokes,
                 pageStrokes
               );
@@ -419,7 +512,7 @@ export const App: React.FC = () => {
                 const palette = SyntaxHighlighterEngine.applySyntaxHighlighting(
                   updatedStrokes,
                   currentTheme,
-                  cluster.strokeIds.map(id => ({ strokeId: id, tokenType: contextResult.tokenType }))
+                  activeCluster.strokeIds.map(id => ({ strokeId: id, tokenType: contextResult.tokenType }))
                 );
                 if (palette.changedCount > 0) {
                   Object.assign(updatedStrokes, palette.updatedStrokes);
@@ -747,6 +840,9 @@ export const App: React.FC = () => {
 
   // --- Batch Operations ---
   const handleCreateBatch = useCallback((name: string, subject: string, saveLocation?: string) => {
+    // Immediately persist existing batches & notes before adding new batch
+    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+
     const pageId = `page_${Date.now()}`;
     const batchId = `batch_${Date.now()}`;
 
@@ -781,6 +877,9 @@ export const App: React.FC = () => {
   }, []);
 
   const handleSelectBatch = useCallback((batchId: string) => {
+    // Immediately persist previous batch data and notes before switching
+    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+
     setWorkspace(prev => ({
       ...prev,
       activeBatchId: batchId,
@@ -789,6 +888,8 @@ export const App: React.FC = () => {
   }, []);
 
   const handleDeleteBatch = useCallback((batchId: string) => {
+    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+
     setWorkspace(prev => {
       if (prev.batches.length <= 1) return prev;
       const remaining = prev.batches.filter(b => b.id !== batchId);
@@ -801,6 +902,8 @@ export const App: React.FC = () => {
   }, []);
 
   const handleDuplicateBatch = useCallback((batchId: string) => {
+    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+
     const sourceBatch = workspace.batches.find(b => b.id === batchId);
     if (!sourceBatch) return;
 
@@ -831,6 +934,9 @@ export const App: React.FC = () => {
   }, []);
 
   const handleImportDocument = useCallback((importedDoc: WhiteboardDocument) => {
+    // Immediately persist current workspace before importing
+    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+
     const newBatchId = `batch_${Date.now()}`;
     const importedBatch: Batch = {
       id: newBatchId,
@@ -956,6 +1062,7 @@ export const App: React.FC = () => {
         onRedo={handleRedo}
         onClear={handleClear}
         saveStatus={saveStatus}
+        onClose={handleAppClose}
       />
 
       {/* New Page Topic Prompt Modal */}
@@ -1038,6 +1145,8 @@ export const App: React.FC = () => {
           currentWidth={currentWidth}
           strokes={currentStrokes}
           onStrokeComplete={handleStrokeComplete}
+          onEraseStrokes={handleEraseStrokes}
+          onEraseEnd={handleEraseEnd}
           onSelectColor={setColor}
           transform={transform}
           onTransformChange={setTransform}

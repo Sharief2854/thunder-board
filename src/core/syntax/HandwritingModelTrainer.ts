@@ -1,5 +1,6 @@
 import { Stroke } from '../../types/whiteboard';
 import { SyntaxTokenType } from './SyntaxHighlighterEngine';
+import { PREDEFINED_SAMPLES } from './PredefinedModelDataset';
 
 export interface Point2D {
   x: number;
@@ -14,6 +15,7 @@ export interface TrainingSample {
   strokeCount: number;
   aspectRatio: number;
   createdAt: number;
+  isPredefined?: boolean;
 }
 
 export interface TrainedModelData {
@@ -28,6 +30,7 @@ export interface MatchCandidate {
   type: SyntaxTokenType;
   score: number; // 0.0 to 1.0 (1.0 = perfect match)
   distance: number;
+  isCustom?: boolean;
 }
 
 const LOCAL_STORAGE_KEY = 'smartboard_trained_syntax_model_v1';
@@ -38,10 +41,8 @@ export class HandwritingModelTrainer {
   private samples: TrainingSample[] = [];
 
   constructor() {
+    this.samples = [...PREDEFINED_SAMPLES];
     this.loadFromStorage();
-    if (this.samples.length === 0) {
-      this.seedDefaultTemplates();
-    }
   }
 
   static getInstance(): HandwritingModelTrainer {
@@ -200,16 +201,24 @@ export class HandwritingModelTrainer {
   }
 
   /**
-   * Gets samples grouped by token
+   * Gets samples grouped by token with breakdown of predefined vs user-trained samples
    */
-  getTokensSummary(): { token: string; type: SyntaxTokenType; count: number }[] {
-    const map = new Map<string, { token: string; type: SyntaxTokenType; count: number }>();
+  getTokensSummary(): { token: string; type: SyntaxTokenType; count: number; hasPredefined: boolean; customCount: number }[] {
+    const map = new Map<string, { token: string; type: SyntaxTokenType; count: number; hasPredefined: boolean; customCount: number }>();
     for (const s of this.samples) {
       const existing = map.get(s.token);
       if (existing) {
         existing.count++;
+        if (s.isPredefined) existing.hasPredefined = true;
+        else existing.customCount++;
       } else {
-        map.set(s.token, { token: s.token, type: s.type, count: 1 });
+        map.set(s.token, {
+          token: s.token,
+          type: s.type,
+          count: 1,
+          hasPredefined: !!s.isPredefined,
+          customCount: s.isPredefined ? 0 : 1,
+        });
       }
     }
     return Array.from(map.values());
@@ -219,7 +228,7 @@ export class HandwritingModelTrainer {
    * Classifies input strokes against the trained model samples.
    * Returns candidates sorted by confidence score (0.0 to 1.0).
    */
-  classify(strokes: Stroke[], minConfidence: number = 0.65): MatchCandidate | null {
+  classify(strokes: Stroke[], minConfidence: number = 0.50): MatchCandidate | null {
     if (this.samples.length === 0 || strokes.length === 0) return null;
 
     const { points: inputPoints, aspectRatio: inputRatio } =
@@ -230,20 +239,30 @@ export class HandwritingModelTrainer {
     let minDistance = Infinity;
 
     for (const sample of this.samples) {
-      // Aspect ratio tolerance check (must be somewhat compatible)
+      // Stroke count check: allow leeway of ±3 strokes
+      if (sample.strokeCount && Math.abs(sample.strokeCount - strokes.length) > 3) {
+        continue;
+      }
+
+      // Aspect ratio tolerance check (must be compatible)
       const ratioDiff = Math.abs(Math.log(Math.max(0.1, inputRatio) / Math.max(0.1, sample.aspectRatio)));
-      if (ratioDiff > 1.25) continue;
+      if (ratioDiff > 1.35) continue;
 
       const dist = HandwritingModelTrainer.computeDistance(inputPoints, sample.points);
-      if (dist < minDistance) {
-        minDistance = dist;
-        // Map distance [0.0 ... 0.6] to confidence score [1.0 ... 0.0]
-        const score = Math.max(0, 1 - dist / 0.55);
+
+      // User-trained sample bonus (prioritizes user-specific handwriting samples)
+      const adjustedDist = sample.isPredefined ? dist : dist * 0.88;
+
+      if (adjustedDist < minDistance) {
+        minDistance = adjustedDist;
+        // Map distance [0.0 ... 0.62] to confidence score [1.0 ... 0.0]
+        const score = Math.max(0, 1 - adjustedDist / 0.62);
         bestMatch = {
           token: sample.token,
           type: sample.type,
           score: Math.round(score * 100) / 100,
-          distance: dist,
+          distance: adjustedDist,
+          isCustom: !sample.isPredefined,
         };
       }
     }
@@ -256,15 +275,42 @@ export class HandwritingModelTrainer {
   }
 
   /**
-   * Persists trained dataset to localStorage & Electron IPC
+   * Resets model back to factory predefined models and clears user training
+   */
+  resetToPredefined(): void {
+    this.samples = [...PREDEFINED_SAMPLES];
+    try {
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
+      if (window.smartBoardAPI) {
+        window.smartBoardAPI.saveBoard('custom_syntax_model', JSON.stringify({
+          version: 1,
+          name: 'Custom ThunderBoard Handwriting Model',
+          updatedAt: Date.now(),
+          samples: [],
+        })).catch(() => {});
+      }
+    } catch {}
+  }
+
+  /**
+   * Combines factory predefined samples with user-trained samples
+   */
+  private combineSamples(userSamples: TrainingSample[]): TrainingSample[] {
+    const predefined = [...PREDEFINED_SAMPLES];
+    return [...predefined, ...userSamples];
+  }
+
+  /**
+   * Persists user-trained dataset to localStorage & Electron IPC
    */
   saveToStorage(): void {
     try {
+      const userSamples = this.samples.filter(s => !s.isPredefined);
       const modelData: TrainedModelData = {
         version: 1,
         name: 'Custom ThunderBoard Handwriting Model',
         updatedAt: Date.now(),
-        samples: this.samples,
+        samples: userSamples,
       };
       const jsonStr = JSON.stringify(modelData);
       localStorage.setItem(LOCAL_STORAGE_KEY, jsonStr);
@@ -276,125 +322,32 @@ export class HandwritingModelTrainer {
   }
 
   /**
-   * Loads trained model from storage
+   * Loads trained model from storage and combines with predefined dataset
    */
   async loadFromStorage(): Promise<void> {
+    let userSamples: TrainingSample[] = [];
     try {
       if (window.smartBoardAPI) {
         const res = await window.smartBoardAPI.loadBoard('custom_syntax_model');
         if (res.success && res.data) {
           const parsed = JSON.parse(res.data) as TrainedModelData;
           if (parsed && Array.isArray(parsed.samples)) {
-            this.samples = parsed.samples;
-            return;
+            userSamples = parsed.samples;
           }
         }
       }
 
-      const local = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (local) {
-        const parsed = JSON.parse(local) as TrainedModelData;
-        if (parsed && Array.isArray(parsed.samples)) {
-          this.samples = parsed.samples;
+      if (userSamples.length === 0) {
+        const local = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (local) {
+          const parsed = JSON.parse(local) as TrainedModelData;
+          if (parsed && Array.isArray(parsed.samples)) {
+            userSamples = parsed.samples;
+          }
         }
       }
     } catch {}
-  }
 
-  /**
-   * Seeds initial geometric base templates for common symbols ({, }, <, >, =>, //, etc.)
-   */
-  private seedDefaultTemplates(): void {
-    // 1. Open curly brace '{'
-    const openBracePoints: Point2D[] = [
-      { x: 0.2, y: -0.5 },
-      { x: 0.0, y: -0.4 },
-      { x: -0.1, y: -0.25 },
-      { x: -0.3, y: 0.0 },
-      { x: -0.1, y: 0.25 },
-      { x: 0.0, y: 0.4 },
-      { x: 0.2, y: 0.5 },
-    ];
-    this.samples.push({
-      id: 'default_open_brace',
-      token: '{',
-      type: 'operator',
-      points: HandwritingModelTrainer.resample(openBracePoints),
-      strokeCount: 1,
-      aspectRatio: 0.45,
-      createdAt: Date.now(),
-    });
-
-    // 2. Closing curly brace '}'
-    const closeBracePoints: Point2D[] = [
-      { x: -0.2, y: -0.5 },
-      { x: 0.0, y: -0.4 },
-      { x: 0.1, y: -0.25 },
-      { x: 0.3, y: 0.0 },
-      { x: 0.1, y: 0.25 },
-      { x: 0.0, y: 0.4 },
-      { x: -0.2, y: 0.5 },
-    ];
-    this.samples.push({
-      id: 'default_close_brace',
-      token: '}',
-      type: 'operator',
-      points: HandwritingModelTrainer.resample(closeBracePoints),
-      strokeCount: 1,
-      aspectRatio: 0.45,
-      createdAt: Date.now(),
-    });
-
-    // 3. Arrow function '=>'
-    const arrowPoints: Point2D[] = [
-      { x: -0.4, y: -0.15 },
-      { x: 0.1, y: -0.15 },
-      { x: -0.4, y: 0.15 },
-      { x: 0.1, y: 0.15 },
-      { x: 0.1, y: -0.3 },
-      { x: 0.4, y: 0.0 },
-      { x: 0.1, y: 0.3 },
-    ];
-    this.samples.push({
-      id: 'default_arrow',
-      token: '=>',
-      type: 'operator',
-      points: HandwritingModelTrainer.resample(arrowPoints),
-      strokeCount: 3,
-      aspectRatio: 1.6,
-      createdAt: Date.now(),
-    });
-
-    // 4. HTML Open Angle Bracket '<'
-    const leftAngle: Point2D[] = [
-      { x: 0.3, y: -0.4 },
-      { x: -0.3, y: 0.0 },
-      { x: 0.3, y: 0.4 },
-    ];
-    this.samples.push({
-      id: 'default_left_angle',
-      token: '<',
-      type: 'tag',
-      points: HandwritingModelTrainer.resample(leftAngle),
-      strokeCount: 1,
-      aspectRatio: 0.75,
-      createdAt: Date.now(),
-    });
-
-    // 5. HTML Close Angle Bracket '>'
-    const rightAngle: Point2D[] = [
-      { x: -0.3, y: -0.4 },
-      { x: 0.3, y: 0.0 },
-      { x: -0.3, y: 0.4 },
-    ];
-    this.samples.push({
-      id: 'default_right_angle',
-      token: '>',
-      type: 'tag',
-      points: HandwritingModelTrainer.resample(rightAngle),
-      strokeCount: 1,
-      aspectRatio: 0.75,
-      createdAt: Date.now(),
-    });
+    this.samples = this.combineSamples(userSamples);
   }
 }
