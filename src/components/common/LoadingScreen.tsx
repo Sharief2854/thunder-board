@@ -1,4 +1,5 @@
 import React from 'react';
+import { APP_ICON_BASE64 } from '../../assets/iconBase64';
 
 interface LoadingScreenProps {
   fadingOut?: boolean;
@@ -7,27 +8,37 @@ interface LoadingScreenProps {
 export const LoadingScreen: React.FC<LoadingScreenProps> = ({ fadingOut = false }) => {
   return (
     <div
-      className={`fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-[#0e1117] text-slate-100 transition-opacity duration-500 ease-out select-none ${
+      className={`fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-black text-slate-100 select-none transition-opacity duration-200 ease-out ${
         fadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100'
       }`}
     >
-      {/* Main Container */}
-      <div className="relative z-10 flex flex-col items-center max-w-sm px-6 text-center">
-        {/* Animated Loading Bar */}
-        <div className="w-56 h-1.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700/60 mb-3 relative">
-          <div className="h-full bg-blue-500 rounded-full animate-loading-bar" />
+      <div className="flex flex-col items-center max-w-sm px-6 text-center">
+        {/* Brand Icon */}
+        <div className="w-14 h-14 mb-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center shadow-lg">
+          <img
+            src={APP_ICON_BASE64}
+            alt="ThunderBoard"
+            className="w-8 h-8 rounded object-contain"
+          />
         </div>
 
-        {/* Status Text */}
-        <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
-          <span>Loading workspace & canvas...</span>
+        {/* Title & Subtitle */}
+        <h1 className="text-xl font-bold tracking-tight text-white mb-1">
+          ThunderBoard
+        </h1>
+        <p className="text-xs text-slate-400 mb-6 font-medium">
+          Digital Teaching Whiteboard & Code Canvas
+        </p>
+
+        {/* Clean, minimal loading progress */}
+        <div className="w-48 h-1 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+          <div className="h-full bg-blue-500 rounded-full w-2/5" />
         </div>
       </div>
 
-      {/* Bottom Subtle Tag */}
-      <div className="absolute bottom-6 text-[11px] text-slate-500 tracking-wider uppercase font-medium">
-        Offline-first • Hardware Accelerated
+      {/* Footer attribution */}
+      <div className="absolute bottom-6 text-[11px] text-slate-500 font-medium tracking-wide">
+        Developed by Sharief
       </div>
     </div>
   );

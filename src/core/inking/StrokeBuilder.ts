@@ -30,17 +30,29 @@ export class StrokeBuilder {
     rect: DOMRect,
     transform: ViewportTransform
   ): InkPoint {
+    // Reject invalid disconnected coordinates (e.g. clientX: 0, clientY: 0 hardware glitch)
+    if (e.clientX === 0 && e.clientY === 0) {
+      return this.points[this.points.length - 1] || null as any;
+    }
+
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
     const world = Viewport.screenToWorld(screenX, screenY, transform);
 
-    // Micro-jitter filtering: ignore duplicate/micro points that cause polygon facet noise
+    // Reject false jump glitch to top-left corner
     if (this.points.length > 0) {
       const last = this.points[this.points.length - 1];
       const dx = world.x - last.x;
       const dy = world.y - last.y;
-      // Fast squared distance check avoids Math.hypot sqrt overhead and filters sub-pixel duplicates
-      if (dx * dx + dy * dy < 1.2) {
+      const distSq = dx * dx + dy * dy;
+
+      // If point jumps > 250px and lands near screen (0, 0) (hardware digitizer disconnect), ignore
+      if (distSq > 62500 && e.clientX <= 25 && e.clientY <= 25) {
+        return last;
+      }
+
+      // Micro-jitter filtering: ignore duplicate/micro points that cause polygon facet noise and live lag
+      if (distSq < 2.25) {
         return last;
       }
     }
@@ -92,13 +104,16 @@ export class StrokeBuilder {
       const coalesced = e.getCoalescedEvents();
       if (coalesced && coalesced.length > 0) {
         for (const ce of coalesced) {
+          if (ce.clientX === 0 && ce.clientY === 0) continue;
           this.addPointFromEvent(ce, rect, transform);
         }
         return;
       }
     }
     // Fallback to single event
-    this.addPointFromEvent(e, rect, transform);
+    if (e.clientX !== 0 || e.clientY !== 0) {
+      this.addPointFromEvent(e, rect, transform);
+    }
   }
 
   getPoints(): InkPoint[] {
@@ -125,6 +140,19 @@ export class StrokeBuilder {
    * Finalize and construct immutable Stroke object
    */
   build(): Stroke | null {
+    // Prune any glitch points that jumped towards top-left at the end of the stroke
+    while (this.points.length >= 2) {
+      const last = this.points[this.points.length - 1];
+      const prev = this.points[this.points.length - 2];
+      const dx = last.x - prev.x;
+      const dy = last.y - prev.y;
+      if (dx * dx + dy * dy > 40000 && (Math.abs(last.x) < 50 && Math.abs(last.y) < 50)) {
+        this.points.pop();
+      } else {
+        break;
+      }
+    }
+
     if (this.points.length === 0) return null;
 
     const strokeId = `stroke_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;

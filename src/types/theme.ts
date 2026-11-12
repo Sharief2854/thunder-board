@@ -26,66 +26,45 @@ export interface ThemePalette {
   };
 }
 
-export const WHITEBOARD_THEME: ThemePalette = {
-  theme: 'whiteboard',
-  name: 'White Board',
-  backgroundColor: '#f8fafc',
-  textColor: '#0f172a',
-  gridColor: 'rgba(15, 23, 42, 0.06)',
-  penColors: [
-    { name: 'Black', value: '#1e293b' },
-    { name: 'Blue', value: '#2563eb' },
-    { name: 'Red', value: '#dc2626' },
-    { name: 'Green', value: '#16a34a' },
-    { name: 'Purple', value: '#9333ea' },
-    { name: 'Orange', value: '#ea580c' },
-  ],
-  highlighterColors: [
-    { name: 'Yellow', value: 'rgba(250, 204, 21, 0.35)' },
-    { name: 'Cyan', value: 'rgba(6, 182, 212, 0.35)' },
-    { name: 'Green', value: 'rgba(74, 222, 128, 0.35)' },
-    { name: 'Pink', value: 'rgba(244, 114, 182, 0.35)' },
-  ],
-  overlayColors: {
-    heading: 'rgba(37, 99, 235, 0.18)',
-    mainHeading: 'rgba(147, 51, 234, 0.22)',
-    warning: 'rgba(220, 38, 38, 0.18)',
-    important: 'rgba(234, 88, 12, 0.18)',
-    question: 'rgba(13, 148, 136, 0.18)',
-    keyword: 'rgba(16, 185, 129, 0.18)',
-    bullet: 'rgba(59, 130, 246, 0.18)',
-    connector: '#3b82f6',
-  },
-};
-
 export const BLACKBOARD_THEME: ThemePalette = {
   theme: 'blackboard',
-  name: 'Black Board',
-  backgroundColor: '#111317',
+  name: 'Deep Dark Black',
+  backgroundColor: '#000000',
   textColor: '#f8fafc',
   gridColor: 'transparent',
   penColors: [
-    { name: 'White', value: '#f8fafc' },
-    { name: 'Yellow', value: '#facc15' },
-    { name: 'Cyan', value: '#38bdf8' },
-    { name: 'Pink', value: '#f472b6' },
-    { name: 'Green', value: '#4ade80' },
-    { name: 'Orange', value: '#fb923c' },
+    { name: 'Pure White', value: '#ffffff' },
+    { name: 'Electric Cyan', value: '#00e5ff' },
+    { name: 'Neon Green', value: '#00e676' },
+    { name: 'Sun Yellow', value: '#ffd600' },
+    { name: 'Coral Red', value: '#ff3366' },
+    { name: 'Vivid Orange', value: '#ff6d00' },
+    { name: 'Neon Purple', value: '#b388ff' },
+    { name: 'Hot Pink', value: '#ff4081' },
   ],
   highlighterColors: [
-    { name: 'Yellow', value: 'rgba(250, 204, 21, 0.3)' },
-    { name: 'Cyan', value: 'rgba(56, 189, 248, 0.3)' },
-    { name: 'Green', value: 'rgba(74, 222, 128, 0.3)' },
-    { name: 'Pink', value: 'rgba(244, 114, 182, 0.3)' },
+    { name: 'Gold Glow', value: 'rgba(255, 214, 0, 0.35)' },
+    { name: 'Electric Cyan', value: 'rgba(0, 229, 255, 0.35)' },
+    { name: 'Neon Green', value: 'rgba(0, 230, 118, 0.35)' },
+    { name: 'Coral Rose', value: 'rgba(255, 51, 102, 0.35)' },
+    { name: 'Neon Violet', value: 'rgba(179, 136, 255, 0.35)' },
+    { name: 'Sunset Tangerine', value: 'rgba(255, 109, 0, 0.35)' },
   ],
   overlayColors: {
-    heading: 'rgba(56, 189, 248, 0.22)',
-    mainHeading: 'rgba(192, 132, 252, 0.26)',
-    warning: 'rgba(248, 113, 113, 0.25)',
-    important: 'rgba(251, 146, 60, 0.25)',
-    question: 'rgba(45, 212, 191, 0.22)',
-    keyword: 'rgba(52, 211, 153, 0.25)',
-    bullet: 'rgba(96, 165, 250, 0.22)',
-    connector: '#38bdf8',
+    heading: 'rgba(0, 229, 255, 0.22)',
+    mainHeading: 'rgba(179, 136, 255, 0.26)',
+    warning: 'rgba(255, 51, 102, 0.25)',
+    important: 'rgba(255, 109, 0, 0.25)',
+    question: 'rgba(0, 230, 118, 0.22)',
+    keyword: 'rgba(255, 214, 0, 0.25)',
+    bullet: 'rgba(0, 229, 255, 0.22)',
+    connector: '#00e5ff',
   },
+};
+
+// Aliased to ensure pure dark mode everywhere even if a legacy doc has 'whiteboard'
+export const WHITEBOARD_THEME: ThemePalette = {
+  ...BLACKBOARD_THEME,
+  theme: 'whiteboard',
+  name: 'Deep Dark Black',
 };

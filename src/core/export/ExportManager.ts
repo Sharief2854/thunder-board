@@ -1,4 +1,4 @@
-import { WhiteboardDocument, WhiteboardPage, Stroke, BoardThemeType, TextBoxElement } from '../../types/whiteboard';
+import { WhiteboardDocument, WhiteboardPage, Stroke, BoardThemeType, TextBoxElement, ImageElement } from '../../types/whiteboard';
 import { WHITEBOARD_THEME, BLACKBOARD_THEME } from '../../types/theme';
 import { Smoother } from '../inking/Smoother';
 import { CanvasController } from '../canvas/CanvasController';
@@ -8,18 +8,22 @@ export class ExportManager {
   /**
    * Render a specific page to an offscreen canvas at crystal-clear 4K resolution (3840 x 2160)
    */
-  static renderPageToCanvas(
+  static async renderPageToCanvas(
     page: WhiteboardPage,
     strokesMap: Record<string, Stroke>,
     theme: BoardThemeType,
     exportWidth = 3840,
     exportHeight = 2160,
-    textElementsMap?: Record<string, TextBoxElement>
-  ): HTMLCanvasElement {
+    textElementsMap?: Record<string, TextBoxElement>,
+    imageElementsMap?: Record<string, ImageElement>
+  ): Promise<HTMLCanvasElement> {
     const pageStrokes = Object.values(strokesMap).filter(
       s => s.pageId === page.id && !s.isErased
     );
     const pageTextElements = Object.values(textElementsMap || {}).filter(
+      t => t.pageId === page.id
+    );
+    const pageImageElements = Object.values(imageElementsMap || {}).filter(
       t => t.pageId === page.id
     );
 
@@ -49,12 +53,38 @@ export class ExportManager {
       }
     }
 
-    // Fit content (both strokes and text elements) to export frame with comfortable padding
-    const transform = CanvasController.fitToScreen(pageStrokes, exportWidth, exportHeight, 140, pageTextElements);
+    // Fit content (strokes, text elements, and images) to export frame with comfortable padding
+    const transform = CanvasController.fitToScreen(pageStrokes, exportWidth, exportHeight, 140, pageTextElements, pageImageElements);
 
     ctx.save();
     ctx.translate(transform.x, transform.y);
     ctx.scale(transform.zoom, transform.zoom);
+
+    // Render images under strokes
+    if (pageImageElements.length > 0) {
+      const loadedImages = await Promise.all(
+        pageImageElements.map(
+          elem =>
+            new Promise<HTMLImageElement | null>(resolve => {
+              const img = new Image();
+              img.crossOrigin = 'anonymous';
+              img.onload = () => resolve(img);
+              img.onerror = () => resolve(null);
+              img.src = elem.src;
+            })
+        )
+      );
+
+      for (let i = 0; i < pageImageElements.length; i++) {
+        const elem = pageImageElements[i];
+        const img = loadedImages[i];
+        if (img) {
+          ctx.save();
+          ctx.drawImage(img, elem.x, elem.y, elem.width, elem.height);
+          ctx.restore();
+        }
+      }
+    }
 
     // Render strokes
     for (const stroke of pageStrokes) {
@@ -133,10 +163,11 @@ export class ExportManager {
     page: WhiteboardPage,
     strokesMap: Record<string, Stroke>,
     theme: BoardThemeType,
-    textElementsMap?: Record<string, TextBoxElement>
+    textElementsMap?: Record<string, TextBoxElement>,
+    imageElementsMap?: Record<string, ImageElement>
   ): Promise<boolean> {
     try {
-      const canvas = this.renderPageToCanvas(page, strokesMap, theme, 2560, 1440, textElementsMap);
+      const canvas = await this.renderPageToCanvas(page, strokesMap, theme, 2560, 1440, textElementsMap, imageElementsMap);
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
       if (!blob) return false;
 
@@ -158,13 +189,14 @@ export class ExportManager {
   /**
    * Save current page as 4K Ultra-HD PNG file download
    */
-  static savePageAsPng(
+  static async savePageAsPng(
     page: WhiteboardPage,
     strokesMap: Record<string, Stroke>,
     theme: BoardThemeType,
-    textElementsMap?: Record<string, TextBoxElement>
-  ): boolean {
-    const canvas = this.renderPageToCanvas(page, strokesMap, theme, 3840, 2160, textElementsMap);
+    textElementsMap?: Record<string, TextBoxElement>,
+    imageElementsMap?: Record<string, ImageElement>
+  ): Promise<boolean> {
+    const canvas = await this.renderPageToCanvas(page, strokesMap, theme, 3840, 2160, textElementsMap, imageElementsMap);
     const dataUrl = canvas.toDataURL('image/png');
     const safeTitle = page.title.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
     const link = document.createElement('a');
@@ -183,7 +215,8 @@ export class ExportManager {
     page: WhiteboardPage,
     strokesMap: Record<string, Stroke>,
     theme: BoardThemeType,
-    textElementsMap?: Record<string, TextBoxElement>
+    textElementsMap?: Record<string, TextBoxElement>,
+    imageElementsMap?: Record<string, ImageElement>
   ): boolean {
     const pageStrokes = Object.values(strokesMap).filter(
       s => s.pageId === page.id && !s.isErased
@@ -191,11 +224,14 @@ export class ExportManager {
     const pageTextElements = Object.values(textElementsMap || {}).filter(
       t => t.pageId === page.id
     );
+    const pageImageElements = Object.values(imageElementsMap || {}).filter(
+      i => i.pageId === page.id
+    );
 
     const themeConfig = theme === 'whiteboard' ? WHITEBOARD_THEME : BLACKBOARD_THEME;
     const isDark = theme === 'blackboard' || theme === 'chalkboard';
 
-    const box = CanvasController.getContentBoundingBox(pageStrokes, pageTextElements) || {
+    const box = CanvasController.getContentBoundingBox(pageStrokes, pageTextElements, pageImageElements) || {
       minX: 0,
       minY: 0,
       maxX: 1920,
@@ -206,6 +242,11 @@ export class ExportManager {
 
     const pad = 60;
     const viewBox = `${box.minX - pad} ${box.minY - pad} ${box.width + pad * 2} ${box.height + pad * 2}`;
+
+    let svgImages = '';
+    for (const img of pageImageElements) {
+      svgImages += `<image href="${img.src}" x="${img.x}" y="${img.y}" width="${img.width}" height="${img.height}" />\n`;
+    }
 
     let svgPaths = '';
     for (const stroke of pageStrokes) {
@@ -253,6 +294,7 @@ export class ExportManager {
     const svgContent = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" width="100%" height="100%">
   <rect x="${box.minX - pad}" y="${box.minY - pad}" width="${box.width + pad * 2}" height="${box.height + pad * 2}" fill="${themeConfig.backgroundColor}" />
+  ${svgImages}
   ${svgPaths}
   ${svgTextElements}
 </svg>`;
@@ -279,7 +321,8 @@ export class ExportManager {
     pages: WhiteboardPage[],
     strokesMap: Record<string, Stroke>,
     theme: BoardThemeType,
-    textElementsMap: Record<string, TextBoxElement> = {}
+    textElementsMap: Record<string, TextBoxElement> = {},
+    imageElementsMap: Record<string, ImageElement> = {}
   ): Promise<boolean> {
     const html = HtmlViewerGenerator.generateInteractiveHtml(
       batchName,
@@ -287,7 +330,8 @@ export class ExportManager {
       pages,
       strokesMap,
       theme,
-      textElementsMap
+      textElementsMap,
+      imageElementsMap
     );
 
     const safeTitle = batchName.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();

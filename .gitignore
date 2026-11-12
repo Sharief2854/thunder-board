@@ -7,6 +7,8 @@ node_modules/
 dist/
 dist-electron/
 release/
+release-*/
+v*-backup/
 build/temp/
 
 # Logs & Diagnostics

@@ -6,12 +6,13 @@ import { Minimap } from '../components/minimap/Minimap';
 import { PageNavigationHUD } from '../components/pages/PageNavigationHUD';
 import { PageDrawer } from '../components/pages/PageDrawer';
 import { NewPageModal } from '../components/pages/NewPageModal';
-import { BatchManagerModal } from '../components/batches/BatchManagerModal';
+import { BatchesAndFilesDrawer } from '../components/batches/BatchesAndFilesDrawer';
 import { ShareModal } from '../components/export/ShareModal';
 import {
   AppWorkspace,
   Batch,
   BoardThemeType,
+  ImageElement,
   Stroke,
   StrokeTool,
   ShapeType,
@@ -20,16 +21,23 @@ import {
   WhiteboardDocument,
   WhiteboardPage,
 } from '../types/whiteboard';
-import { WHITEBOARD_THEME, BLACKBOARD_THEME } from '../types/theme';
+import { BLACKBOARD_THEME } from '../types/theme';
 import { CanvasController } from '../core/canvas/CanvasController';
 import { StorageManager } from '../core/storage/StorageManager';
 import { SyntaxHighlighterEngine } from '../core/syntax/SyntaxHighlighterEngine';
 import { ContextAwareSyntaxEngine } from '../core/syntax/ContextAwareSyntaxEngine';
 import { ModelTrainerModal } from '../components/syntax/ModelTrainerModal';
 import { MovableTextBox } from '../components/canvas/MovableTextBox';
+import { MovableImage } from '../components/canvas/MovableImage';
 import { TextBoxTypeModal } from '../components/canvas/TextBoxTypeModal';
 import { LoadingScreen } from '../components/common/LoadingScreen';
+import { SavingOverlay } from '../components/common/SavingOverlay';
 import { SettingsModal, AppSettings } from '../components/common/SettingsModal';
+import { FloatingBoardOverlay } from '../components/canvas/FloatingBoardOverlay';
+import { UpdateNotificationToast } from '../components/common/UpdateNotificationToast';
+import { useAutosave } from '../hooks/useAutosave';
+import { useClipboardPaste } from '../hooks/useClipboardPaste';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 export const App: React.FC = () => {
   // --- Workspace & Batches State ---
@@ -43,23 +51,98 @@ export const App: React.FC = () => {
   const activePage =
     activeBatch.pages.find(p => p.id === activeBatch.activePageId) || activeBatch.pages[0];
 
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
+  // Tool Selection State
+  const [tool, setTool] = useState<StrokeTool>('pen');
+
+  // Persistence Refs & Autosave Hook
+  const isLoadedRef = useRef(false);
+  const workspaceRef = useRef<AppWorkspace>(workspace);
+  workspaceRef.current = workspace;
+
+  const {
+    saveStatus,
+    setSaveStatus,
+    savingTitle,
+    savingDetail,
+    isExiting,
+    handleManualSave,
+    handleAppClose,
+  } = useAutosave({
+    workspace,
+    workspaceRef,
+    isLoadedRef,
+  });
 
   // Modals & Drawers State
   const [isPageDrawerOpen, setIsPageDrawerOpen] = useState(false);
   const [isNewPageModalOpen, setIsNewPageModalOpen] = useState(false);
-  const [isBatchManagerOpen, setIsBatchManagerOpen] = useState(false);
+  const [isBatchesDrawerOpen, setIsBatchesDrawerOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareTargetPage, setShareTargetPage] = useState<WhiteboardPage | null>(null);
   const [isModelTrainerOpen, setIsModelTrainerOpen] = useState(false);
   const [isTextBoxTypeModalOpen, setIsTextBoxTypeModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
+  // Undocked / Picture-in-Picture Floating Board State
+  const [isFloatingBoard, setIsFloatingBoard] = useState<boolean>(false);
+  const [_isEdgeCollapsed, setIsEdgeCollapsed] = useState<boolean>(false);
+
+  const handleCollapseToEdge = useCallback(async () => {
+    if (window.smartBoardAPI?.collapseToEdge) {
+      await window.smartBoardAPI.collapseToEdge();
+      setIsEdgeCollapsed(true);
+    }
+  }, []);
+
+  const handleToggleFloatingBoard = useCallback(async () => {
+    if (!isFloatingBoard) {
+      if (window.smartBoardAPI?.undockToFloating) {
+        await window.smartBoardAPI.undockToFloating();
+      }
+      setIsFloatingBoard(true);
+      setIsEdgeCollapsed(false);
+    } else {
+      if (window.smartBoardAPI?.dockToFull) {
+        await window.smartBoardAPI.dockToFull();
+      }
+      setIsFloatingBoard(false);
+      setIsEdgeCollapsed(false);
+    }
+  }, [isFloatingBoard]);
+
+  useEffect(() => {
+    const unsubEdgeExpanded = window.smartBoardAPI?.onEdgeExpanded?.(() => {
+      setIsEdgeCollapsed(false);
+      setIsFloatingBoard(true);
+    });
+    const unsubToggleFloating = window.smartBoardAPI?.onToggleFloating?.(() => {
+      handleToggleFloatingBoard();
+    });
+    const unsubCollapseEdge = window.smartBoardAPI?.onTriggerCollapseToEdge?.(() => {
+      handleCollapseToEdge();
+    });
+    return () => {
+      unsubEdgeExpanded?.();
+      unsubToggleFloating?.();
+      unsubCollapseEdge?.();
+    };
+  }, [handleToggleFloatingBoard, handleCollapseToEdge]);
+
   // App User Preferences & Settings (Persisted in localStorage)
   const [settings, setSettings] = useState<AppSettings>(() => {
     try {
       const saved = localStorage.getItem('thunderboard_settings');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          autoIconGeneration: true,
+          showNavigation: true,
+          pinPenToolbar: localStorage.getItem('smartboard_toolbar_pinned') === 'true',
+          autoSnapShapes: false,
+          quickTapGestures: true,
+          ...parsed,
+        };
+      }
     } catch (e) {
       console.error(e);
     }
@@ -68,6 +151,7 @@ export const App: React.FC = () => {
       showNavigation: true,
       pinPenToolbar: localStorage.getItem('smartboard_toolbar_pinned') === 'true',
       autoSnapShapes: false,
+      quickTapGestures: true,
     };
   });
 
@@ -90,30 +174,13 @@ export const App: React.FC = () => {
   const [showLoadingScreen, setShowLoadingScreen] = useState<boolean>(true);
   const [isLoadingFadingOut, setIsLoadingFadingOut] = useState<boolean>(false);
 
-  useEffect(() => {
-    // Keep splash loading screen active briefly to let canvas and state settle
-    const timerFade = setTimeout(() => {
-      setIsLoadingFadingOut(true);
-    }, 600);
-
-    const timerRemove = setTimeout(() => {
-      setShowLoadingScreen(false);
-    }, 1300);
-
-    return () => {
-      clearTimeout(timerFade);
-      clearTimeout(timerRemove);
-    };
-  }, []);
-
   // Drawing Tools State & Per-Tool Size Memory
-  const [tool, setTool] = useState<StrokeTool>('pen');
   const [color, setColor] = useState<string>(BLACKBOARD_THEME.penColors[0].value);
   const [toolSizes, setToolSizes] = useState<Record<StrokeTool, number>>({
     pen: 4,
     pencil: 2,
     highlighter: 18,
-    'stroke-eraser': 20,
+    'stroke-eraser': 2,
     select: 4,
     pan: 4,
     text: 16,
@@ -148,6 +215,44 @@ export const App: React.FC = () => {
   const handleSelectTool = useCallback((newTool: StrokeTool) => {
     setTool(newTool);
   }, []);
+
+  // Track last active inking tool so toggling from eraser restores pen/pencil/highlighter
+  const lastPenToolRef = useRef<StrokeTool>('pen');
+
+  useEffect(() => {
+    if (tool !== 'stroke-eraser' && tool !== 'select' && tool !== 'pan' && tool !== 'shape' && tool !== 'text') {
+      lastPenToolRef.current = tool;
+    }
+  }, [tool]);
+
+  // Triple-Click Gesture: Toggle Pen <-> Eraser (and vice versa)
+  const handleTogglePenEraser = useCallback(() => {
+    setTool(prevTool => {
+      if (prevTool === 'stroke-eraser') {
+        return lastPenToolRef.current || 'pen';
+      } else {
+        lastPenToolRef.current = prevTool;
+        return 'stroke-eraser';
+      }
+    });
+  }, []);
+
+  // Double-Click Gesture: Cycle Active Pen Color through the palette
+  const handleCycleColor = useCallback(() => {
+    const colors = BLACKBOARD_THEME.penColors;
+    if (!colors || colors.length === 0) return;
+
+    // If currently using eraser, switch to drawing tool
+    if (tool === 'stroke-eraser') {
+      setTool(lastPenToolRef.current || 'pen');
+    }
+
+    setColor(prevColor => {
+      const currentIndex = colors.findIndex(c => c.value.toLowerCase() === prevColor.toLowerCase());
+      const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % colors.length;
+      return colors[nextIndex].value;
+    });
+  }, [activeBatch.theme, tool]);
 
   const handleSelectWidth = useCallback(
     (newWidth: number) => {
@@ -272,74 +377,221 @@ export const App: React.FC = () => {
     setSelectedTextId(null);
   }, []);
 
-  // Flag to prevent saving initial unpopulated load
-  const isLoadedRef = useRef(false);
-  const workspaceRef = useRef<AppWorkspace>(workspace);
-  workspaceRef.current = workspace;
+  // --- Movable Image Elements (Pasted from Clipboard Ctrl+V / Snipping Tool) ---
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+  const [hoveredImageId, setHoveredImageId] = useState<string | null>(null);
+  const currentImageElements = Object.values(activeBatch.imageElements || {}).filter(
+    img => img.pageId === activePage.id
+  );
+  const lastPasteTimeRef = useRef(0);
+  const lastPasteLengthRef = useRef(0);
 
-  // Load Workspace from Storage on Mount
-  useEffect(() => {
-    const initLoad = async () => {
-      const loaded = await StorageManager.loadWorkspace();
-      if (loaded && loaded.batches && loaded.batches.length > 0) {
-        setWorkspace(loaded);
-        setSaveStatus('saved');
+  // Paste / Add Image Element
+  const handlePasteImage = useCallback(
+    (dataUrl: string) => {
+      if (!dataUrl || !dataUrl.startsWith('data:image/')) return;
+      const now = Date.now();
+      if (now - lastPasteTimeRef.current < 600 && Math.abs(dataUrl.length - lastPasteLengthRef.current) < 50) {
+        return; // Ignore duplicate paste triggered in rapid succession
       }
-      isLoadedRef.current = true;
-    };
+      lastPasteTimeRef.current = now;
+      lastPasteLengthRef.current = dataUrl.length;
 
-    initLoad();
-  }, []);
+      const img = new Image();
+      img.onload = () => {
+        const naturalW = img.naturalWidth || 400;
+        const naturalH = img.naturalHeight || 300;
 
-  // Trigger Draw-Aware Debounced Autosave (Never lags during active inking)
-  useEffect(() => {
-    if (!isLoadedRef.current) return;
-    StorageManager.scheduleAutosave(workspace, setSaveStatus, 2000);
-  }, [workspace]);
+        // Scale comfortably within current viewport (max 650w, 450h)
+        const maxInitialW = Math.min(650, canvasSize.width * 0.7);
+        const maxInitialH = Math.min(450, canvasSize.height * 0.7);
+        const scaleRatio = Math.min(1, maxInitialW / naturalW, maxInitialH / naturalH);
 
-  // Guaranteed Save on Window Close, Page Refresh, or App Exit
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
-    };
+        const initialW = Math.max(100, Math.round(naturalW * scaleRatio));
+        const initialH = Math.max(60, Math.round(naturalH * scaleRatio));
 
-    const handlePageHide = () => {
-      StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
-    };
+        // Position at center of current viewport
+        const worldCenterX = Math.round((-transform.x + (canvasSize.width / 2) - (initialW / 2)) / transform.zoom);
+        const worldCenterY = Math.round((-transform.y + (canvasSize.height / 2) - (initialH / 2)) / transform.zoom);
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    window.addEventListener('pagehide', handlePageHide);
+        const id = `img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const newImgElem: ImageElement = {
+          id,
+          pageId: activePage.id,
+          x: worldCenterX,
+          y: worldCenterY,
+          width: initialW,
+          height: initialH,
+          src: dataUrl,
+          isFixed: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
 
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('pagehide', handlePageHide);
-    };
-  }, []);
+        setWorkspace(prev => {
+          const nextBatches = prev.batches.map(b => {
+            if (b.id !== prev.activeBatchId) return b;
+            return {
+              ...b,
+              imageElements: {
+                ...(b.imageElements || {}),
+                [id]: newImgElem,
+              },
+              updatedAt: Date.now(),
+            };
+          });
+          return { ...prev, batches: nextBatches };
+        });
 
-  // Dedicated App Close Handler for TitleBar Close button
-  const handleAppClose = useCallback(async () => {
-    setSaveStatus('saving');
-    await StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
-    setSaveStatus('saved');
-    if (window.smartBoardAPI) {
-      window.smartBoardAPI.close();
-    } else {
-      window.close();
-    }
-  }, []);
+        setSelectedImageId(id);
+      };
+      img.src = dataUrl;
+    },
+    [activePage.id, transform, canvasSize]
+  );
 
-  // Adapt current ink color when theme changes
-  const toggleTheme = useCallback(() => {
+  const handleUpdateImage = useCallback((updated: ImageElement) => {
     setWorkspace(prev => {
       const nextBatches = prev.batches.map(b => {
         if (b.id !== prev.activeBatchId) return b;
-        const nextTheme: BoardThemeType = b.theme === 'whiteboard' ? 'blackboard' : 'whiteboard';
-        const nextPalette = nextTheme === 'whiteboard' ? WHITEBOARD_THEME : BLACKBOARD_THEME;
-        setColor(nextPalette.penColors[0].value);
-        return { ...b, theme: nextTheme, updatedAt: Date.now() };
+        return {
+          ...b,
+          imageElements: {
+            ...(b.imageElements || {}),
+            [updated.id]: updated,
+          },
+          updatedAt: Date.now(),
+        };
       });
       return { ...prev, batches: nextBatches };
     });
+  }, []);
+
+  const handleDeleteImage = useCallback((id: string) => {
+    setWorkspace(prev => {
+      const nextBatches = prev.batches.map(b => {
+        if (b.id !== prev.activeBatchId) return b;
+        const remaining = { ...(b.imageElements || {}) };
+        delete remaining[id];
+        return {
+          ...b,
+          imageElements: remaining,
+          updatedAt: Date.now(),
+        };
+      });
+      return { ...prev, batches: nextBatches };
+    });
+    setSelectedImageId(null);
+  }, []);
+
+  const handleDuplicateImage = useCallback((source: ImageElement) => {
+    const id = `img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const duplicate: ImageElement = {
+      ...source,
+      id,
+      x: source.x + 30,
+      y: source.y + 30,
+      isFixed: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    setWorkspace(prev => {
+      const nextBatches = prev.batches.map(b => {
+        if (b.id !== prev.activeBatchId) return b;
+        return {
+          ...b,
+          imageElements: {
+            ...(b.imageElements || {}),
+            [id]: duplicate,
+          },
+          updatedAt: Date.now(),
+        };
+      });
+      return { ...prev, batches: nextBatches };
+    });
+    setSelectedImageId(id);
+  }, []);
+
+  // Fix (Commit) all active images into the canvas background on loose focus / drawing
+  const handleFixImages = useCallback(() => {
+    setSelectedImageId(null);
+    setWorkspace(prev => {
+      const currentBatchObj = prev.batches.find(b => b.id === prev.activeBatchId);
+      if (!currentBatchObj || !currentBatchObj.imageElements) return prev;
+      let changed = false;
+      const updatedImages = { ...currentBatchObj.imageElements };
+      for (const [id, img] of Object.entries(updatedImages)) {
+        if (!img.isFixed) {
+          updatedImages[id] = { ...img, isFixed: true, updatedAt: Date.now() };
+          changed = true;
+        }
+      }
+      if (!changed) return prev;
+      const nextBatches = prev.batches.map(b =>
+        b.id === prev.activeBatchId ? { ...b, imageElements: updatedImages, updatedAt: Date.now() } : b
+      );
+      return { ...prev, batches: nextBatches };
+    });
+  }, []);
+
+  // Toggle Image Fix state (Double-click image to unlock for editing if needed)
+  const handleToggleImageFix = useCallback((id: string) => {
+    setWorkspace(prev => {
+      const currentBatchObj = prev.batches.find(b => b.id === prev.activeBatchId);
+      if (!currentBatchObj || !currentBatchObj.imageElements || !currentBatchObj.imageElements[id]) return prev;
+      const targetImg = currentBatchObj.imageElements[id];
+      const nextFixed = !targetImg.isFixed;
+      const updatedImages = {
+        ...currentBatchObj.imageElements,
+        [id]: { ...targetImg, isFixed: nextFixed, updatedAt: Date.now() },
+      };
+      if (!nextFixed) {
+        setSelectedImageId(id);
+      } else {
+        setSelectedImageId(null);
+      }
+      const nextBatches = prev.batches.map(b =>
+        b.id === prev.activeBatchId ? { ...b, imageElements: updatedImages, updatedAt: Date.now() } : b
+      );
+      return { ...prev, batches: nextBatches };
+    });
+  }, []);
+
+  // Global Clipboard Image Paste Listener
+  useClipboardPaste({ onPasteImage: handlePasteImage });
+
+  // Load Workspace from Storage on Mount with Smooth Loading Screen
+  useEffect(() => {
+    const initLoad = async () => {
+      const startTime = Date.now();
+      const loaded = await StorageManager.loadWorkspace();
+      if (loaded && loaded.batches && loaded.batches.length > 0) {
+        let validActiveId = loaded.activeBatchId;
+        if (!loaded.batches.some(b => b.id === validActiveId)) {
+          validActiveId = loaded.batches[0].id;
+        }
+        const validated: AppWorkspace = {
+          activeBatchId: validActiveId,
+          batches: loaded.batches,
+        };
+        workspaceRef.current = validated;
+        setWorkspace(validated);
+        setSaveStatus('saved');
+      }
+      isLoadedRef.current = true;
+
+      // Fast, snappy transition to canvas without artificial delay
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.max(0, 150 - elapsed);
+      setTimeout(() => {
+        setIsLoadingFadingOut(true);
+        setTimeout(() => {
+          setShowLoadingScreen(false);
+        }, 200);
+      }, remaining);
+    };
+
+    initLoad();
   }, []);
 
   // Track whether an active real-time eraser swipe is in progress (for single undo snapshot)
@@ -361,7 +613,7 @@ export const App: React.FC = () => {
         );
         setHistory(h => ({
           ...h,
-          [pageId]: [...(h[pageId] || []), currentList],
+          [pageId]: [...(h[pageId] || []), currentList].slice(-30),
         }));
         setRedoStack(r => ({
           ...r,
@@ -396,6 +648,7 @@ export const App: React.FC = () => {
   // Commit a newly drawn stroke to active batch
   const handleStrokeComplete = useCallback(
     (stroke: Stroke) => {
+      handleFixImages();
       const pageId = activePage.id;
 
       if (stroke.tool === 'stroke-eraser') {
@@ -450,7 +703,7 @@ export const App: React.FC = () => {
 
         setHistory(h => ({
           ...h,
-          [pageId]: [...(h[pageId] || []), currentList],
+          [pageId]: [...(h[pageId] || []), currentList].slice(-30),
         }));
         setRedoStack(r => ({
           ...r,
@@ -531,7 +784,7 @@ export const App: React.FC = () => {
         return { ...prev, batches: nextBatches };
       });
     },
-    [activePage.id, isCodeHighlightActive]
+    [activePage.id, isCodeHighlightActive, handleFixImages]
   );
 
   // Undo (Page-Specific)
@@ -677,10 +930,11 @@ export const App: React.FC = () => {
       canvasSize.width,
       canvasSize.height,
       80,
-      currentTextElements
+      currentTextElements,
+      currentImageElements
     );
     setTransform(next);
-  }, [currentStrokes, canvasSize, currentTextElements]);
+  }, [currentStrokes, canvasSize, currentTextElements, currentImageElements]);
 
   // --- Page Operations with Topic Prompt ---
   const handleCreatePageWithTopic = useCallback(
@@ -840,9 +1094,6 @@ export const App: React.FC = () => {
 
   // --- Batch Operations ---
   const handleCreateBatch = useCallback((name: string, subject: string, saveLocation?: string) => {
-    // Immediately persist existing batches & notes before adding new batch
-    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
-
     const pageId = `page_${Date.now()}`;
     const batchId = `batch_${Date.now()}`;
 
@@ -868,59 +1119,80 @@ export const App: React.FC = () => {
       theme: 'blackboard',
     };
 
-    setWorkspace(prev => ({
-      activeBatchId: batchId,
-      batches: [...prev.batches, newBatch],
-    }));
+    setWorkspace(prev => {
+      const next: AppWorkspace = {
+        activeBatchId: batchId,
+        batches: [...prev.batches, newBatch],
+      };
+      workspaceRef.current = next;
+      // Fast non-blocking save
+      StorageManager.flushImmediate(next, { generateHtml: false });
+      return next;
+    });
 
     setTransform({ x: 0, y: 0, zoom: 1 });
   }, []);
 
+  // Instant Batch Switching (0ms UI latency, background async persist)
   const handleSelectBatch = useCallback((batchId: string) => {
-    // Immediately persist previous batch data and notes before switching
-    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+    if (batchId === workspaceRef.current.activeBatchId) return;
 
-    setWorkspace(prev => ({
-      ...prev,
-      activeBatchId: batchId,
-    }));
+    // 1. Immediately switch active batch in React state (0ms latency!)
+    setWorkspace(prev => {
+      const next = { ...prev, activeBatchId: batchId };
+      workspaceRef.current = next;
+      return next;
+    });
     setTransform({ x: 0, y: 0, zoom: 1 });
+
+    // 2. Persist activeBatchId asynchronously in background without blocking UI
+    setSaveStatus('saving');
+    StorageManager.saveWorkspaceImmediate(workspaceRef.current, { generateHtml: false }).then(success => {
+      setSaveStatus(success ? 'saved' : 'unsaved');
+    });
   }, []);
 
   const handleDeleteBatch = useCallback((batchId: string) => {
-    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
-
     setWorkspace(prev => {
       if (prev.batches.length <= 1) return prev;
       const remaining = prev.batches.filter(b => b.id !== batchId);
       const nextActiveId = prev.activeBatchId === batchId ? remaining[0].id : prev.activeBatchId;
-      return {
+      const next: AppWorkspace = {
         activeBatchId: nextActiveId,
         batches: remaining,
       };
+      workspaceRef.current = next;
+
+      // Physically purge deleted batch from disk and cache so it NEVER resurrects
+      StorageManager.deleteBatch(batchId);
+      StorageManager.flushImmediate(next, { generateHtml: false });
+      return next;
     });
   }, []);
 
   const handleDuplicateBatch = useCallback((batchId: string) => {
-    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
+    setWorkspace(prev => {
+      const sourceBatch = prev.batches.find(b => b.id === batchId);
+      if (!sourceBatch) return prev;
 
-    const sourceBatch = workspace.batches.find(b => b.id === batchId);
-    if (!sourceBatch) return;
+      const newBatchId = `batch_${Date.now()}`;
+      const newBatch: Batch = {
+        ...sourceBatch,
+        id: newBatchId,
+        name: `${sourceBatch.name} (Copy)`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
 
-    const newBatchId = `batch_${Date.now()}`;
-    const newBatch: Batch = {
-      ...sourceBatch,
-      id: newBatchId,
-      name: `${sourceBatch.name} (Copy)`,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    setWorkspace(prev => ({
-      activeBatchId: newBatchId,
-      batches: [...prev.batches, newBatch],
-    }));
-  }, [workspace.batches]);
+      const next: AppWorkspace = {
+        activeBatchId: newBatchId,
+        batches: [...prev.batches, newBatch],
+      };
+      workspaceRef.current = next;
+      StorageManager.flushImmediate(next, { generateHtml: false });
+      return next;
+    });
+  }, []);
 
   // Trigger Share Modal for specific page or batch
   const handleOpenShareForPage = useCallback((page: WhiteboardPage) => {
@@ -934,9 +1206,6 @@ export const App: React.FC = () => {
   }, []);
 
   const handleImportDocument = useCallback((importedDoc: WhiteboardDocument) => {
-    // Immediately persist current workspace before importing
-    StorageManager.flushImmediate(workspaceRef.current, { generateHtml: true });
-
     const newBatchId = `batch_${Date.now()}`;
     const importedBatch: Batch = {
       id: newBatchId,
@@ -950,78 +1219,78 @@ export const App: React.FC = () => {
       theme: importedDoc.theme || 'blackboard',
     };
 
-    setWorkspace(prev => ({
-      activeBatchId: newBatchId,
-      batches: [...prev.batches, importedBatch],
-    }));
+    setWorkspace(prev => {
+      const next: AppWorkspace = {
+        activeBatchId: newBatchId,
+        batches: [...prev.batches, importedBatch],
+      };
+      workspaceRef.current = next;
+      StorageManager.flushImmediate(next, { generateHtml: false });
+      return next;
+    });
   }, []);
 
-  // Keyboard Navigation & Shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isCmdOrCtrl = e.ctrlKey || e.metaKey;
-
-      if (isCmdOrCtrl && e.key.toLowerCase() === 'z') {
-        if (e.shiftKey) {
-          handleRedo();
-        } else {
-          handleUndo();
+  // Load a lesson file directly from disk into the whiteboard
+  const handleLoadLessonFileFromPath = useCallback(
+    async (filePath: string) => {
+      try {
+        if (!window.smartBoardAPI?.readFilePath) return;
+        const res = await window.smartBoardAPI.readFilePath(filePath);
+        if (!res.success || !res.content) {
+          console.error('Failed to read file:', res.error);
+          return;
         }
-        e.preventDefault();
-      } else if (isCmdOrCtrl && e.key.toLowerCase() === 'y') {
-        handleRedo();
-        e.preventDefault();
-      } else if (isCmdOrCtrl && e.key.toLowerCase() === 'e') {
-        handleOpenShareBatch();
-        e.preventDefault();
-      } else if (isCmdOrCtrl && (e.key === '=' || e.key === '+')) {
-        handleZoomIn();
-        e.preventDefault();
-      } else if (isCmdOrCtrl && (e.key === '-' || e.key === '_')) {
-        handleZoomOut();
-        e.preventDefault();
-      } else if (isCmdOrCtrl && e.key === '0') {
-        handleResetZoom();
-        e.preventDefault();
-      } else if (isCmdOrCtrl && e.key === '9') {
-        handleFitToContent();
-        e.preventDefault();
-      } else if (e.key === 'PageUp' || (isCmdOrCtrl && e.key === '[')) {
-        const idx = activeBatch.pages.findIndex(p => p.id === activePage.id);
-        if (idx > 0) handleSelectPage(activeBatch.pages[idx - 1].id);
-        e.preventDefault();
-      } else if (e.key === 'PageDown' || (isCmdOrCtrl && e.key === ']')) {
-        const idx = activeBatch.pages.findIndex(p => p.id === activePage.id);
-        if (idx < activeBatch.pages.length - 1) handleSelectPage(activeBatch.pages[idx + 1].id);
-        e.preventDefault();
-      } else if (!isCmdOrCtrl && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
-        if (e.key.toLowerCase() === 'p') setTool('pen');
-        if (e.key.toLowerCase() === 'e') setTool('stroke-eraser');
-        if (e.key.toLowerCase() === 'h') setTool('pan');
-        if (e.key.toLowerCase() === 'c') handleToggleCodeHighlight();
-        if (e.key.toLowerCase() === 't') setIsTextBoxTypeModalOpen(true);
-        if (e.key.toLowerCase() === 's') setTool('shape');
+        const data = JSON.parse(res.content);
+        // Case 1: AppWorkspace file
+        if (data.batches && Array.isArray(data.batches)) {
+          setWorkspace(prev => {
+            const existingIds = new Set(prev.batches.map(b => b.id));
+            const toAdd = data.batches.filter((b: Batch) => !existingIds.has(b.id));
+            const newBatches = [...prev.batches, ...toAdd];
+            const nextActiveId = data.activeBatchId || (toAdd[0] ? toAdd[0].id : prev.activeBatchId);
+            const next: AppWorkspace = {
+              activeBatchId: nextActiveId,
+              batches: newBatches.length > 0 ? newBatches : prev.batches,
+            };
+            workspaceRef.current = next;
+            StorageManager.flushImmediate(next, { generateHtml: false });
+            return next;
+          });
+        }
+        // Case 2: Single WhiteboardDocument
+        else if (data.pages && Array.isArray(data.pages)) {
+          handleImportDocument(data as WhiteboardDocument);
+        }
+      } catch (err) {
+        console.error('Error loading lesson file:', err);
       }
-    };
+    },
+    [handleImportDocument]
+  );
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
+  // Global Keyboard Shortcuts
+  useKeyboardShortcuts({
     handleUndo,
     handleRedo,
     handleZoomIn,
     handleZoomOut,
     handleResetZoom,
     handleFitToContent,
-    activeBatch.pages,
-    activePage.id,
+    pages: activeBatch.pages,
+    activePageId: activePage.id,
     handleSelectPage,
     handleOpenShareBatch,
-    handleAddTextBox,
-  ]);
+    handleManualSave,
+    handleToggleFloatingBoard,
+    handleCollapseToEdge,
+    isFloatingBoard,
+    setTool,
+    handleToggleCodeHighlight,
+    setIsTextBoxTypeModalOpen,
+  });
 
-  const currentTheme = activeBatch.theme || 'blackboard';
-  const currentThemeConfig = currentTheme === 'whiteboard' ? WHITEBOARD_THEME : BLACKBOARD_THEME;
+  const currentTheme: BoardThemeType = 'blackboard';
+  const currentThemeConfig = BLACKBOARD_THEME;
   const currentHistory = history[activePage.id] || [];
   const currentRedo = redoStack[activePage.id] || [];
 
@@ -1037,7 +1306,100 @@ export const App: React.FC = () => {
     pages: activeBatch.pages,
     strokes: activeBatch.strokes || {},
     textElements: activeBatch.textElements || {},
+    imageElements: activeBatch.imageElements || {},
   };
+
+  // Dedicated Undocked / Picture-in-Picture Floating Mode (Pure Canvas, No Clutter, Shortcut Driven)
+  if (isFloatingBoard) {
+    return (
+      <div
+        className={`w-full h-full relative select-none overflow-hidden theme-${currentTheme}`}
+        style={{
+          backgroundColor: currentThemeConfig.backgroundColor,
+          color: currentThemeConfig.textColor,
+        }}
+      >
+        {/* Sleek Minimal Floating Header: Move handle on left, Tuck + Pin + Close on right */}
+        <FloatingBoardOverlay
+          theme={currentTheme}
+          onClose={handleToggleFloatingBoard}
+          onCollapseToEdge={handleCollapseToEdge}
+        />
+
+        {/* 100% Pure Whiteboard Canvas with NO controls */}
+        <div className="w-full h-full relative">
+          <WhiteboardCanvas
+            pageId={activePage.id}
+            theme={currentTheme}
+            currentTool={tool}
+            currentColor={color}
+            currentWidth={currentWidth}
+            strokes={currentStrokes}
+            onStrokeComplete={handleStrokeComplete}
+            onEraseStrokes={handleEraseStrokes}
+            onEraseEnd={handleEraseEnd}
+            onSelectColor={setColor}
+            transform={transform}
+            onTransformChange={setTransform}
+            onCanvasSizeChange={handleCanvasSizeChange}
+            activeShapeType={activeShapeType}
+            isAutoSnapEnabled={isAutoSnapEnabled}
+            images={currentImageElements}
+            onHoverImage={setHoveredImageId}
+            onPointerDownCanvas={handleFixImages}
+            onToggleImageFix={handleToggleImageFix}
+            isClickGesturesEnabled={settings.quickTapGestures}
+            onCycleColor={handleCycleColor}
+            onTogglePenEraser={handleTogglePenEraser}
+          >
+            {/* Movable & Resizable Pasted Images */}
+            {currentImageElements.map(img => (
+              <MovableImage
+                key={img.id}
+                element={img}
+                transform={transform}
+                theme={currentTheme}
+                isSelected={selectedImageId === img.id}
+                isHovered={hoveredImageId === img.id}
+                onSelect={() => {
+                  setSelectedImageId(img.id);
+                  setSelectedTextId(null);
+                }}
+                onChange={handleUpdateImage}
+                onDelete={handleDeleteImage}
+                onDuplicate={handleDuplicateImage}
+              />
+            ))}
+          </WhiteboardCanvas>
+
+          {/* Movable Text Elements */}
+          {currentTextElements.map(elem => (
+            <MovableTextBox
+              key={elem.id}
+              element={elem}
+              transform={transform}
+              theme={currentTheme}
+              isSelected={selectedTextId === elem.id}
+              onSelect={() => {
+                setSelectedTextId(elem.id);
+                setSelectedImageId(null);
+              }}
+              onChange={handleUpdateTextBox}
+              onDelete={handleDeleteTextBox}
+            />
+          ))}
+        </div>
+
+        {/* Saving Loading Animation Overlay */}
+        <SavingOverlay
+          isSaving={saveStatus === 'saving'}
+          isExiting={isExiting}
+          title={savingTitle}
+          detail={savingDetail}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1051,10 +1413,13 @@ export const App: React.FC = () => {
       <TitleBar
         boardTitle={activePage.title}
         batchName={activeBatch.name}
+        batches={workspace.batches}
+        activeBatchId={workspace.activeBatchId}
+        onSelectBatch={handleSelectBatch}
+        onOpenBatchesDrawer={() => setIsBatchesDrawerOpen(true)}
         theme={currentTheme}
-        onThemeToggle={toggleTheme}
         onOpenShare={handleOpenShareBatch}
-        onOpenBatchManager={() => setIsBatchManagerOpen(true)}
+        onOpenBatchManager={() => setIsBatchesDrawerOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onNewPage={() => setIsNewPageModalOpen(true)}
         onOpenDrawer={() => setIsPageDrawerOpen(true)}
@@ -1062,7 +1427,9 @@ export const App: React.FC = () => {
         onRedo={handleRedo}
         onClear={handleClear}
         saveStatus={saveStatus}
+        onSave={handleManualSave}
         onClose={handleAppClose}
+        onUndockBoard={handleToggleFloatingBoard}
       />
 
       {/* New Page Topic Prompt Modal */}
@@ -1074,10 +1441,10 @@ export const App: React.FC = () => {
         theme={currentTheme}
       />
 
-      {/* Batches & Classes Manager Modal */}
-      <BatchManagerModal
-        isOpen={isBatchManagerOpen}
-        onClose={() => setIsBatchManagerOpen(false)}
+      {/* Batches & Files Library Drawer (Dedicated Hub for all Batches and Saved Files on PC) */}
+      <BatchesAndFilesDrawer
+        isOpen={isBatchesDrawerOpen}
+        onClose={() => setIsBatchesDrawerOpen(false)}
         batches={workspace.batches}
         activeBatchId={workspace.activeBatchId}
         onSelectBatch={handleSelectBatch}
@@ -1086,8 +1453,22 @@ export const App: React.FC = () => {
         onDuplicateBatch={handleDuplicateBatch}
         onExportBatch={b => {
           setWorkspace(prev => ({ ...prev, activeBatchId: b.id }));
-          setIsBatchManagerOpen(false);
+          setIsBatchesDrawerOpen(false);
           handleOpenShareBatch();
+        }}
+        onLoadFileToBoard={handleLoadLessonFileFromPath}
+        onImportFromFile={async () => {
+          if (window.smartBoardAPI) {
+            const res = await window.smartBoardAPI.importFile();
+            if (!res.canceled && res.content) {
+              try {
+                const doc = JSON.parse(res.content);
+                handleImportDocument(doc);
+              } catch (e) {
+                console.error('Error importing file:', e);
+              }
+            }
+          }
         }}
         theme={currentTheme}
       />
@@ -1100,6 +1481,7 @@ export const App: React.FC = () => {
         activePage={shareTargetPage || activePage}
         strokes={activeBatch.strokes || {}}
         textElements={activeBatch.textElements || {}}
+        imageElements={activeBatch.imageElements || {}}
         theme={currentTheme}
         onImportDocument={handleImportDocument}
       />
@@ -1132,7 +1514,7 @@ export const App: React.FC = () => {
           onReorderPages={handleReorderPages}
           onSharePage={handleOpenShareForPage}
           onShareBatch={handleOpenShareBatch}
-          onOpenBatchManager={() => setIsBatchManagerOpen(true)}
+          onOpenBatchManager={() => setIsBatchesDrawerOpen(true)}
           theme={currentTheme}
         />
 
@@ -1153,7 +1535,33 @@ export const App: React.FC = () => {
           onCanvasSizeChange={handleCanvasSizeChange}
           activeShapeType={activeShapeType}
           isAutoSnapEnabled={isAutoSnapEnabled}
-        />
+          images={currentImageElements}
+          onHoverImage={setHoveredImageId}
+          onPointerDownCanvas={handleFixImages}
+          onToggleImageFix={handleToggleImageFix}
+          isClickGesturesEnabled={settings.quickTapGestures}
+          onCycleColor={handleCycleColor}
+          onTogglePenEraser={handleTogglePenEraser}
+        >
+          {/* Movable & Resizable Pasted Images (Rendered underneath ink strokes so stylus/pen draws directly on top!) */}
+          {currentImageElements.map(img => (
+            <MovableImage
+              key={img.id}
+              element={img}
+              transform={transform}
+              theme={currentTheme}
+              isSelected={selectedImageId === img.id}
+              isHovered={hoveredImageId === img.id}
+              onSelect={() => {
+                setSelectedImageId(img.id);
+                setSelectedTextId(null);
+              }}
+              onChange={handleUpdateImage}
+              onDelete={handleDeleteImage}
+              onDuplicate={handleDuplicateImage}
+            />
+          ))}
+        </WhiteboardCanvas>
 
         {/* Movable Text & Code Boxes (Drag anywhere, toggle Code vs Text) */}
         {currentTextElements.map(elem => (
@@ -1163,7 +1571,10 @@ export const App: React.FC = () => {
             transform={transform}
             theme={currentTheme}
             isSelected={selectedTextId === elem.id}
-            onSelect={() => setSelectedTextId(elem.id)}
+            onSelect={() => {
+              setSelectedTextId(elem.id);
+              setSelectedImageId(null);
+            }}
             onChange={handleUpdateTextBox}
             onDelete={handleDeleteTextBox}
           />
@@ -1190,7 +1601,6 @@ export const App: React.FC = () => {
           width={currentWidth}
           onSelectWidth={handleSelectWidth}
           theme={currentTheme}
-          onToggleTheme={toggleTheme}
           canUndo={currentHistory.length > 0}
           canRedo={currentRedo.length > 0}
           onUndo={handleUndo}
@@ -1211,6 +1621,7 @@ export const App: React.FC = () => {
           onToggleAutoSnap={() => handleUpdateSettings({ autoSnapShapes: !settings.autoSnapShapes })}
           isPinned={settings.pinPenToolbar}
           onTogglePin={() => handleUpdateSettings({ pinPenToolbar: !settings.pinPenToolbar })}
+          onUndockBoard={handleToggleFloatingBoard}
         />
 
         {/* Modal: Choose Code Box vs Normal Text Box */}
@@ -1240,10 +1651,21 @@ export const App: React.FC = () => {
           theme={currentTheme}
         />
 
+        {/* Saving Loading Animation Overlay (HUD or Modal) */}
+        <SavingOverlay
+          isSaving={saveStatus === 'saving'}
+          isExiting={isExiting}
+          title={savingTitle}
+          detail={savingDetail}
+        />
+
         {/* Startup Loading Screen */}
         {showLoadingScreen && (
           <LoadingScreen fadingOut={isLoadingFadingOut} />
         )}
+
+        {/* Auto-Updater Live Toast Notification */}
+        <UpdateNotificationToast onOpenSettings={() => setIsSettingsOpen(true)} />
       </main>
     </div>
   );

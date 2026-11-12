@@ -1,4 +1,4 @@
-import { WhiteboardPage, Stroke, BoardThemeType, TextBoxElement } from '../../types/whiteboard';
+import { WhiteboardPage, Stroke, BoardThemeType, TextBoxElement, ImageElement } from '../../types/whiteboard';
 
 export class HtmlViewerGenerator {
   /**
@@ -11,7 +11,8 @@ export class HtmlViewerGenerator {
     pages: WhiteboardPage[],
     strokes: Record<string, Stroke>,
     initialTheme: BoardThemeType = 'blackboard',
-    textElements: Record<string, TextBoxElement> = {}
+    textElements: Record<string, TextBoxElement> = {},
+    imageElements: Record<string, ImageElement> = {}
   ): string {
     const dataJson = JSON.stringify({
       batchName,
@@ -19,6 +20,7 @@ export class HtmlViewerGenerator {
       pages,
       strokes,
       textElements: textElements || {},
+      imageElements: imageElements || {},
       initialTheme,
     });
 
@@ -432,6 +434,22 @@ export class HtmlViewerGenerator {
     let panX = 0;
     let panY = 0;
 
+    const imageCache = {};
+    function preloadImages() {
+      const allImages = Object.values(data.imageElements || {});
+      for (const imgEl of allImages) {
+        if (!imageCache[imgEl.id] && imgEl.src) {
+          const img = new Image();
+          img.onload = function() {
+            imageCache[imgEl.id] = img;
+            render();
+          };
+          img.src = imgEl.src;
+          imageCache[imgEl.id] = img;
+        }
+      }
+    }
+
     const container = document.getElementById('viewport-container');
     const canvas = document.getElementById('board-canvas');
     const ctx = canvas.getContext('2d');
@@ -521,6 +539,12 @@ export class HtmlViewerGenerator {
       return Object.values(data.textElements || {}).filter(t => t.pageId === page.id);
     }
 
+    function getCurrentPageImages() {
+      const page = data.pages[currentPageIndex];
+      if (!page) return [];
+      return Object.values(data.imageElements || {}).filter(img => img.pageId === page.id);
+    }
+
     function highlightCode(code) {
       var escaped = escapeHtmlText(code);
       try {
@@ -592,7 +616,8 @@ export class HtmlViewerGenerator {
     function fitToScreen() {
       const strokes = getCurrentPageStrokes();
       const textBoxes = getCurrentPageTextBoxes();
-      if (strokes.length === 0 && textBoxes.length === 0) {
+      const images = getCurrentPageImages();
+      if (strokes.length === 0 && textBoxes.length === 0 && images.length === 0) {
         zoom = 1;
         panX = 0;
         panY = 0;
@@ -614,6 +639,13 @@ export class HtmlViewerGenerator {
         minY = Math.min(minY, t.y);
         maxX = Math.max(maxX, t.x + (t.width || 260));
         maxY = Math.max(maxY, t.y + (t.height || 120));
+      }
+
+      for (const img of images) {
+        minX = Math.min(minX, img.x);
+        minY = Math.min(minY, img.y);
+        maxX = Math.max(maxX, img.x + (img.width || 400));
+        maxY = Math.max(maxY, img.y + (img.height || 300));
       }
 
       const w = maxX - minX || 800;
@@ -657,6 +689,17 @@ export class HtmlViewerGenerator {
       }
 
       ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * panX, dpr * panY);
+
+      // Render images under strokes
+      const images = getCurrentPageImages();
+      for (const imgEl of images) {
+        const cachedImg = imageCache[imgEl.id];
+        if (cachedImg && cachedImg.complete && cachedImg.naturalWidth > 0) {
+          try {
+            ctx.drawImage(cachedImg, imgEl.x, imgEl.y, imgEl.width, imgEl.height);
+          } catch (e) {}
+        }
+      }
 
       const strokes = getCurrentPageStrokes();
       for (const stroke of strokes) {
@@ -773,6 +816,7 @@ export class HtmlViewerGenerator {
       if (e.key === '0' && (e.ctrlKey || e.metaKey)) btnReset.click();
     };
 
+    preloadImages();
     renderTopicsNav();
 
     setTimeout(() => {

@@ -12,12 +12,12 @@ interface VsCodeColorPickerProps {
   maxPinnedColors?: number;
 }
 
-// 24 Curated Vibrant Solid Presets
+// 24 Curated Vibrant Solid Presets Optimized for Deep Black Canvas
 const EXTENDED_PALETTE = [
-  '#f87171', '#ef4444', '#dc2626', '#f43f5e', '#ec4899', '#d946ef',
-  '#a855f7', '#8b5cf6', '#6366f1', '#3b82f6', '#0ea5e9', '#06b6d4',
-  '#14b8a6', '#10b981', '#22c55e', '#84cc16', '#eab308', '#f59e0b',
-  '#f97316', '#ea580c', '#ffffff', '#94a3b8', '#64748b', '#000000',
+  '#ffffff', '#00e5ff', '#00e676', '#ffd600', '#ff3366', '#ff6d00',
+  '#b388ff', '#ff4081', '#1de9b6', '#76ff03', '#ffab00', '#f50057',
+  '#00b0ff', '#3b82f6', '#651fff', '#d500f9', '#f43f5e', '#ff9100',
+  '#a3e635', '#22c55e', '#10b981', '#38bdf8', '#c084fc', '#f472b6',
 ];
 
 // Color conversion helpers
@@ -318,7 +318,7 @@ export const VsCodeColorPicker: React.FC<VsCodeColorPickerProps> = ({
             top: `${(1 - hsv.v) * 100}%`,
             backgroundColor: currentHex,
           }}
-          className="absolute -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-white shadow-[0_0_4px_rgba(0,0,0,0.8)] pointer-events-none transition-transform active:scale-125"
+          className="absolute -translate-x-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full border-2 border-white shadow-sm pointer-events-none"
         />
       </div>
 
@@ -410,9 +410,9 @@ export const VsCodeColorPicker: React.FC<VsCodeColorPickerProps> = ({
                 onTogglePinColor(currentHex);
               }}
               disabled={isAtLimit}
-              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10.5px] font-semibold transition-all border ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10.5px] font-semibold transition-colors border ${
                 isColorPinned
-                  ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-500/30'
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
                   : isAtLimit
                   ? 'bg-black/5 dark:bg-white/5 opacity-50 cursor-not-allowed border-current/10 text-slate-400'
                   : 'bg-black/10 dark:bg-white/10 hover:bg-black/20 dark:hover:bg-white/20 border-current/15 opacity-85 hover:opacity-100'
@@ -453,15 +453,15 @@ export const VsCodeColorPicker: React.FC<VsCodeColorPickerProps> = ({
                 }}
                 title={`${c}${isPinned ? ' (Pinned to Toolbar)' : ''}`}
                 style={{ backgroundColor: c }}
-                className={`h-6 rounded-md border transition-all relative flex items-center justify-center ${
+                className={`h-6 rounded-md border relative flex items-center justify-center transition-colors ${
                   isSelected
-                    ? 'border-blue-500 ring-2 ring-blue-400/50 scale-105 shadow-md'
-                    : 'border-black/20 dark:border-white/20 hover:scale-105'
+                    ? 'border-white ring-2 ring-blue-500'
+                    : 'border-black/20 dark:border-white/20 hover:border-white/60'
                 }`}
               >
-                {isSelected && <Check className="w-3 h-3 text-white drop-shadow" />}
+                {isSelected && <Check className="w-3 h-3 text-white" />}
                 {isPinned && !isSelected && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-white shadow-xs" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-white/80" />
                 )}
               </button>
             );

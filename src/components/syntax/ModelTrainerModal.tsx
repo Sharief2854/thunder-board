@@ -4,7 +4,6 @@ import {
   Plus,
   Trash2,
   CheckCircle2,
-  Sparkles,
   RotateCcw,
   Layers,
   BrainCircuit,
@@ -268,27 +267,27 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75"
       onClick={onClose}
     >
       <div
         onClick={e => e.stopPropagation()}
-        className={`w-full max-w-4xl rounded-3xl shadow-2xl border flex flex-col overflow-hidden animate-in zoom-in-95 duration-150 max-h-[92vh] ${
+        className={`w-full max-w-4xl rounded-xl shadow-2xl border flex flex-col overflow-hidden max-h-[92vh] ${
           isDark
-            ? 'bg-slate-900 border-white/15 text-slate-100 shadow-[0_24px_60px_rgba(0,0,0,0.8)]'
-            : 'bg-white border-slate-200 text-slate-800 shadow-[0_24px_60px_rgba(0,0,0,0.2)]'
+            ? 'bg-slate-900 border-white/10 text-slate-100'
+            : 'bg-white border-slate-200 text-slate-800'
         }`}
       >
         {/* Header */}
         <div className="px-6 py-4 border-b border-current/10 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-purple-600 flex items-center justify-center text-white shadow-lg shadow-purple-900/30">
+            <div className="w-9 h-9 rounded-lg bg-purple-600 flex items-center justify-center text-white shadow-sm">
               <BrainCircuit className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold flex items-center gap-2">
+              <h2 className="text-base font-bold flex items-center gap-2">
                 Handwriting Recognition & Syntax Model Studio
-                <span className="text-[11px] font-mono font-medium px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                <span className="text-[11px] font-mono font-medium px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
                   <ShieldCheck className="w-3 h-3" />
                   Predefined Ready
                 </span>
@@ -300,9 +299,9 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 opacity-70 hover:opacity-100 transition-opacity"
+            className="p-1.5 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 opacity-70 hover:opacity-100 transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
@@ -438,8 +437,8 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
               <div className="flex items-center justify-between text-xs font-medium opacity-80">
                 <span>Draw your symbol / keyword below:</span>
                 {testResult && (
-                  <span className="font-mono text-purple-400 flex items-center gap-1.5 animate-in fade-in bg-purple-500/15 px-2.5 py-1 rounded-lg border border-purple-500/30">
-                    <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="font-mono text-purple-400 flex items-center gap-1.5 bg-purple-500/15 px-2.5 py-1 rounded-md border border-purple-500/30">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-purple-400" />
                     Recognized: <strong>{testResult.token}</strong> ({testResult.confidence}% match)
                     {testResult.isCustom && <span className="text-[10px] text-emerald-400 font-sans">(Custom Trained)</span>}
                   </span>
@@ -447,7 +446,7 @@ export const ModelTrainerModal: React.FC<ModelTrainerModalProps> = ({
               </div>
 
               <div
-                className={`relative h-60 rounded-2xl border-2 border-dashed flex items-center justify-center overflow-hidden touch-none ${
+                className={`relative h-60 rounded-xl border border-dashed flex items-center justify-center overflow-hidden touch-none ${
                   isDark
                     ? 'bg-slate-950/80 border-purple-500/30 shadow-inner'
                     : 'bg-slate-50 border-purple-500/30 shadow-inner'

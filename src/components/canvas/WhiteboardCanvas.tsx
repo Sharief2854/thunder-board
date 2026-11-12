@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, useLayoutEffect } from 'react';
 import { Check } from 'lucide-react';
-import { BoardThemeType, Stroke, StrokeTool, ViewportTransform, ShapeType } from '../../types/whiteboard';
-import { WHITEBOARD_THEME, BLACKBOARD_THEME } from '../../types/theme';
+import { BoardThemeType, Stroke, StrokeTool, ViewportTransform, ShapeType, ImageElement } from '../../types/whiteboard';
+import { BLACKBOARD_THEME } from '../../types/theme';
 import { Smoother } from '../../core/inking/Smoother';
 import { StrokeBuilder } from '../../core/inking/StrokeBuilder';
 import { Viewport } from '../../core/canvas/Viewport';
@@ -25,6 +25,14 @@ interface WhiteboardCanvasProps {
   onCanvasSizeChange?: (width: number, height: number) => void;
   activeShapeType?: ShapeType;
   isAutoSnapEnabled?: boolean;
+  children?: React.ReactNode;
+  images?: ImageElement[];
+  onHoverImage?: (id: string | null) => void;
+  onPointerDownCanvas?: () => void;
+  onToggleImageFix?: (id: string) => void;
+  isClickGesturesEnabled?: boolean;
+  onCycleColor?: () => void;
+  onTogglePenEraser?: () => void;
 }
 
 // Squared distance from point (px, py) to line segment (ax, ay) -> (bx, by)
@@ -66,11 +74,33 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
   onCanvasSizeChange,
   activeShapeType = 'rectangle',
   isAutoSnapEnabled = false,
+  children,
+  images,
+  onHoverImage,
+  onPointerDownCanvas,
+  onToggleImageFix,
+  isClickGesturesEnabled = true,
+  onCycleColor,
+  onTogglePenEraser,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement>(null);
   const inkCanvasRef = useRef<HTMLCanvasElement>(null);
   const scratchCanvasRef = useRef<HTMLCanvasElement>(null);
+  const hoveredImageIdRef = useRef<string | null>(null);
+  const canvasRectRef = useRef<DOMRect | null>(null);
+
+  // Multi-Click Inking Gestures Tracking (2 clicks = cycle color, 3 clicks = toggle pen/eraser)
+  const pointerDownInfoRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const recentTapsRef = useRef<Array<{ x: number; y: number; time: number; strokeId?: string }>>([]);
+  const doubleTapTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Clean up gesture timers on unmount
+  useEffect(() => {
+    return () => {
+      if (doubleTapTimerRef.current) clearTimeout(doubleTapTimerRef.current);
+    };
+  }, []);
 
   const activeBuilderRef = useRef<StrokeBuilder | null>(null);
   const isDrawingRef = useRef<boolean>(false);
@@ -112,13 +142,32 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
   const reticleRef = useRef<HTMLDivElement>(null);
   const rafActiveStrokeRef = useRef<number | null>(null);
 
-  // Long-Press Quick Color Picker State
+  // Long-Press Quick Water Bubble Color Picker State
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
-  const [radialMenu, setRadialMenu] = useState<{ x: number; y: number; isOpen: boolean }>({
+  const radialMenuRef = useRef<{
+    x: number;
+    y: number;
+    isOpen: boolean;
+    activeHoverColor: string | null;
+    isPenDown: boolean;
+  }>({
     x: 0,
     y: 0,
     isOpen: false,
+    activeHoverColor: null,
+    isPenDown: false,
+  });
+  const [radialMenu, setRadialMenu] = useState<{
+    x: number;
+    y: number;
+    isOpen: boolean;
+    activeHoverColor: string | null;
+  }>({
+    x: 0,
+    y: 0,
+    isOpen: false,
+    activeHoverColor: null,
   });
 
   // Real-Time Eraser Tracking State
@@ -184,7 +233,7 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
     }
   }, [onEraseStrokes, strokes]);
 
-  const themeConfig = theme === 'whiteboard' ? WHITEBOARD_THEME : BLACKBOARD_THEME;
+  const themeConfig = BLACKBOARD_THEME;
 
   // Spacebar pan key listener
   useEffect(() => {
@@ -192,8 +241,9 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
       if (e.code === 'Space' && !e.repeat && (e.target as HTMLElement).tagName !== 'INPUT') {
         setIsSpacePressed(true);
       }
-      if (e.key === 'Escape' && radialMenu.isOpen) {
-        setRadialMenu({ x: 0, y: 0, isOpen: false });
+      if (e.key === 'Escape' && radialMenuRef.current.isOpen) {
+        radialMenuRef.current = { x: 0, y: 0, isOpen: false, activeHoverColor: null, isPenDown: false };
+        setRadialMenu({ x: 0, y: 0, isOpen: false, activeHoverColor: null });
       }
     };
 
@@ -209,51 +259,24 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [radialMenu.isOpen]);
+  }, []);
 
-  // Render Background Grid
+  // Render Background: Pure Deep Dark Black (Zero Dots)
   const renderBackground = useCallback(() => {
     const bgCanvas = bgCanvasRef.current;
-    const container = containerRef.current;
-    if (!bgCanvas || !container) return;
+    if (!bgCanvas) return;
 
     const ctx = bgCanvas.getContext('2d');
     if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const width = container.clientWidth;
-    const height = container.clientHeight;
 
     // Reset transform & clear
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
 
-    // Fill theme background
-    ctx.fillStyle = themeConfig.backgroundColor;
+    // Fill pure deep dark black background
+    ctx.fillStyle = themeConfig.backgroundColor || '#000000';
     ctx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
-
-    // Apply DPR scale for crisp grid
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    if (!themeConfig.gridColor || themeConfig.gridColor === 'transparent') return;
-
-    const gridSize = 28 * transform.zoom;
-    if (gridSize < 8) return;
-
-    const offsetX = ((transform.x % gridSize) + gridSize) % gridSize;
-    const offsetY = ((transform.y % gridSize) + gridSize) % gridSize;
-
-    ctx.fillStyle = themeConfig.gridColor;
-    const dotRadius = Math.max(1, 1.2 * Math.min(1.5, transform.zoom));
-
-    for (let x = offsetX; x < width; x += gridSize) {
-      for (let y = offsetY; y < height; y += gridSize) {
-        ctx.beginPath();
-        ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-  }, [themeConfig, transform]);
+  }, [themeConfig]);
 
   // Render Committed Ink Strokes with Viewport Culling
   const renderCommittedInk = useCallback(() => {
@@ -299,16 +322,19 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
           stroke.color,
           stroke.width
         );
-      } else if (stroke.pathOutline && stroke.pathOutline.length > 0) {
+      } else {
+        // Guarantee pathOutline is computed and cached in memory for sub-millisecond GPU redraws!
+        if (!stroke.pathOutline || stroke.pathOutline.length === 0) {
+          stroke.pathOutline = Smoother.computeOutline(stroke.points, stroke.tool, stroke.width);
+        }
         ctx.save();
         ctx.fillStyle = stroke.color;
         if (stroke.tool === 'highlighter') {
           ctx.globalAlpha = 0.35;
+          ctx.globalCompositeOperation = 'multiply';
         }
         Smoother.drawPolygon(ctx, stroke.pathOutline);
         ctx.restore();
-      } else {
-        Smoother.renderStroke(ctx, stroke.points, stroke.tool, stroke.color, stroke.width);
       }
     }
   }, [strokes, transform]);
@@ -355,6 +381,7 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
   const resizeCanvases = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
+    canvasRectRef.current = container.getBoundingClientRect();
 
     const dpr = window.devicePixelRatio || 1;
     const width = container.clientWidth;
@@ -401,6 +428,7 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    canvasRectRef.current = container.getBoundingClientRect();
 
     const observer = new ResizeObserver(() => {
       resizeCanvases();
@@ -421,6 +449,7 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
     e.preventDefault();
     const container = containerRef.current;
     if (!container) return;
+    canvasRectRef.current = container.getBoundingClientRect();
 
     const rect = container.getBoundingClientRect();
 
@@ -443,11 +472,119 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
     }
   };
 
+  // Process Multi-Click Quick Gestures:
+  // 2 consecutive clicks/taps at the EXACT SAME place = Cycle active pen color
+  // 3 consecutive clicks/taps at the EXACT SAME place = Toggle Pen <-> Eraser
+  const processTapGesture = useCallback(
+    (localX: number, localY: number, strokeId?: string) => {
+      if (!isClickGesturesEnabled) return;
+
+      const now = Date.now();
+      // Keep recent taps within 380ms
+      const recent = recentTapsRef.current.filter(t => now - t.time < 380);
+
+      // Strict "at the same place" constraint:
+      // Maximum 10px radius from the original 1st tap's anchor position
+      const MAX_TAP_RADIUS = 10;
+
+      let consecutive: Array<{ x: number; y: number; time: number; strokeId?: string }>;
+      if (recent.length > 0) {
+        // ALWAYS check distance against the INITIAL anchor tap, not just the previous tap!
+        const anchor = recent[0];
+        const distFromAnchor = Math.hypot(localX - anchor.x, localY - anchor.y);
+
+        if (distFromAnchor <= MAX_TAP_RADIUS) {
+          consecutive = [...recent, { x: localX, y: localY, time: now, strokeId }];
+        } else {
+          // Tap is at a different place on the board -> reset previous sequence
+          if (doubleTapTimerRef.current) {
+            clearTimeout(doubleTapTimerRef.current);
+            doubleTapTimerRef.current = null;
+          }
+          consecutive = [{ x: localX, y: localY, time: now, strokeId }];
+        }
+      } else {
+        consecutive = [{ x: localX, y: localY, time: now, strokeId }];
+      }
+
+      recentTapsRef.current = consecutive;
+
+      if (consecutive.length === 2) {
+        // 2 clicks: start short debounce timer to allow potential 3rd click
+        if (doubleTapTimerRef.current) {
+          clearTimeout(doubleTapTimerRef.current);
+        }
+        doubleTapTimerRef.current = setTimeout(() => {
+          const tapList = recentTapsRef.current;
+          recentTapsRef.current = [];
+          doubleTapTimerRef.current = null;
+
+          // Check if double tap landed on a fixed image (unlock image)
+          const world = Viewport.screenToWorld(localX, localY, transform);
+          if (images && images.length > 0) {
+            for (let i = images.length - 1; i >= 0; i--) {
+              const img = images[i];
+              if (
+                world.x >= img.x &&
+                world.x <= img.x + img.width &&
+                world.y >= img.y &&
+                world.y <= img.y + img.height
+              ) {
+                onToggleImageFix?.(img.id);
+                return;
+              }
+            }
+          }
+
+          // Erase the 2 temporary tap dots
+          const dotIds = tapList.map(t => t.strokeId).filter(Boolean) as string[];
+          if (dotIds.length > 0) {
+            onEraseStrokes?.(dotIds);
+          }
+
+          // Trigger Color Cycle!
+          onCycleColor?.();
+        }, 260);
+      } else if (consecutive.length >= 3) {
+        // 3 clicks: TRIPLE-CLICK GESTURE! Cancel double tap timer
+        if (doubleTapTimerRef.current) {
+          clearTimeout(doubleTapTimerRef.current);
+          doubleTapTimerRef.current = null;
+        }
+
+        // Erase the 3 temporary tap dots
+        const dotIds = consecutive.map(t => t.strokeId).filter(Boolean) as string[];
+        if (dotIds.length > 0) {
+          onEraseStrokes?.(dotIds);
+        }
+
+        recentTapsRef.current = [];
+
+        // Toggle Pen <-> Eraser!
+        onTogglePenEraser?.();
+      }
+    },
+    [
+      isClickGesturesEnabled,
+      transform,
+      images,
+      currentTool,
+      onToggleImageFix,
+      onEraseStrokes,
+      onCycleColor,
+      onTogglePenEraser,
+    ]
+  );
+
   // Pointer Event Handlers
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // If radial color menu is open, close it on tap
-    if (radialMenu.isOpen) {
-      setRadialMenu({ x: 0, y: 0, isOpen: false });
+    // Ignore hardware digitizer disconnect / lift-off glitch at (0, 0)
+    if (e.clientX === 0 && e.clientY === 0) return;
+
+    // If radial color menu is open, tapping closes it
+    if (radialMenuRef.current.isOpen) {
+      radialMenuRef.current = { x: 0, y: 0, isOpen: false, activeHoverColor: null, isPenDown: false };
+      setRadialMenu({ x: 0, y: 0, isOpen: false, activeHoverColor: null });
       return;
     }
 
@@ -549,14 +686,22 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
     // Drawing (left click / pen / touch / eraser)
     if (e.button !== 0 && e.button !== 5 && e.pointerType === 'mouse') return;
 
+    // Drawing fixes active images to the canvas
+    onPointerDownCanvas?.();
+
     const target = e.currentTarget;
     try {
       target.setPointerCapture(e.pointerId);
     } catch {}
 
-    const rect = target.getBoundingClientRect();
+    canvasRectRef.current = target.getBoundingClientRect();
+    const rect = canvasRectRef.current;
     const localX = e.clientX - rect.left;
     const localY = e.clientY - rect.top;
+
+    if (isClickGesturesEnabled) {
+      pointerDownInfoRef.current = { x: localX, y: localY, time: Date.now() };
+    }
     if (reticleRef.current) {
       if (e.pointerType === 'touch') {
         reticleRef.current.style.display = 'none';
@@ -589,7 +734,7 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
       StorageManager.setDrawingActive(true);
       erasedInGestureRef.current.clear();
       const world = Viewport.screenToWorld(localX, localY, transform);
-      const eraserRadius = Math.max(14, (currentWidth * 2.5) / transform.zoom);
+      const eraserRadius = Math.max(1, (currentWidth / 2) / transform.zoom);
       eraseStrokesAtPoint(world.x, world.y, eraserRadius);
       return;
     }
@@ -610,13 +755,26 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
         activeBuilderRef.current = null;
         try {
           if (target.hasPointerCapture(e.pointerId)) {
-            target.releasePointerCapture(e.pointerId);
+            // Keep pointer captured so we can track gliding across water bubbles without interruption
           }
         } catch {}
 
-        setRadialMenu({ x: localX, y: localY, isOpen: true });
+        // Open Water Bubble Color Wheel!
+        radialMenuRef.current = {
+          x: localX,
+          y: localY,
+          isOpen: true,
+          activeHoverColor: currentColor,
+          isPenDown: true,
+        };
+        setRadialMenu({
+          x: localX,
+          y: localY,
+          isOpen: true,
+          activeHoverColor: currentColor,
+        });
         longPressTimerRef.current = null;
-      }, 450);
+      }, 360);
     }
 
     const builder = new StrokeBuilder(pageId, activeToolForStroke, currentColor, currentWidth);
@@ -631,6 +789,9 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Ignore hardware digitizer disconnect / lift-off glitch at (0, 0)
+    if (e.clientX === 0 && e.clientY === 0) return;
+
     // Keep pointer coordinates updated in active map
     if (activePointersRef.current.has(e.pointerId)) {
       activePointersRef.current.set(e.pointerId, {
@@ -687,7 +848,7 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
     }
 
     const target = e.currentTarget;
-    const rect = target.getBoundingClientRect();
+    const rect = canvasRectRef.current || target.getBoundingClientRect();
     const localX = e.clientX - rect.left;
     const localY = e.clientY - rect.top;
 
@@ -699,6 +860,61 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
         reticleRef.current.style.display = 'flex';
         reticleRef.current.style.transform = `translate3d(${localX}px, ${localY}px, 0) translate(-50%, -50%)`;
       }
+    }
+
+    // Real-time Water Bubble Color Selection during drag!
+    if (radialMenuRef.current.isOpen) {
+      const menuX = radialMenuRef.current.x;
+      const menuY = radialMenuRef.current.y;
+      const distFromCenter = Math.hypot(localX - menuX, localY - menuY);
+      
+      let closestColor: string | null = null;
+      let minDistance = 9999;
+      const radius = 58; // px radius of water bubble ring
+
+      themeConfig.penColors.forEach((c, i) => {
+        const angle = (i * 2 * Math.PI) / themeConfig.penColors.length - Math.PI / 2;
+        const bx = menuX + Math.round(radius * Math.cos(angle));
+        const by = menuY + Math.round(radius * Math.sin(angle));
+        const d = Math.hypot(localX - bx, localY - by);
+        if (d < minDistance) {
+          minDistance = d;
+          closestColor = c.value;
+        }
+      });
+
+      // If within water bubble proximity (< 38px from any bubble, or dragged outward)
+      const selectedHover = (minDistance < 38 || (distFromCenter > 22 && distFromCenter < 120)) ? closestColor : null;
+      if (radialMenuRef.current.activeHoverColor !== selectedHover) {
+        radialMenuRef.current.activeHoverColor = selectedHover;
+        setRadialMenu(prev => ({ ...prev, activeHoverColor: selectedHover }));
+      }
+      return;
+    }
+
+    // Check if cursor is hovering over any image element (when not in an active gesture)
+    if (images && images.length > 0 && !isDrawingRef.current && !isErasingRef.current && !isPanningRef.current && !isDrawingShapeRef.current) {
+      const currentWorld = Viewport.screenToWorld(localX, localY, transform);
+      let foundHoverId: string | null = null;
+      for (let i = images.length - 1; i >= 0; i--) {
+        const img = images[i];
+        if (
+          currentWorld.x >= img.x &&
+          currentWorld.x <= img.x + img.width &&
+          currentWorld.y >= img.y &&
+          currentWorld.y <= img.y + img.height
+        ) {
+          foundHoverId = img.id;
+          break;
+        }
+      }
+      if (foundHoverId !== hoveredImageIdRef.current) {
+        hoveredImageIdRef.current = foundHoverId;
+        onHoverImage?.(foundHoverId);
+      }
+    } else if (hoveredImageIdRef.current && !isDrawingRef.current && !isErasingRef.current && !isDrawingShapeRef.current) {
+      hoveredImageIdRef.current = null;
+      onHoverImage?.(null);
     }
 
     // Live preview when drawing shapes
@@ -744,6 +960,19 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
       }
     }
 
+    // Cancel tap tracking if pointer moves beyond tap threshold (8px)
+    if (pointerDownInfoRef.current) {
+      const dist = Math.hypot(localX - pointerDownInfoRef.current.x, localY - pointerDownInfoRef.current.y);
+      if (dist > 8) {
+        pointerDownInfoRef.current = null;
+        if (doubleTapTimerRef.current) {
+          clearTimeout(doubleTapTimerRef.current);
+          doubleTapTimerRef.current = null;
+        }
+        recentTapsRef.current = [];
+      }
+    }
+
     if (isPanningRef.current) {
       const deltaX = e.clientX - panStartRef.current.x;
       const deltaY = e.clientY - panStartRef.current.y;
@@ -757,7 +986,7 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
 
     // Handle Real-Time Eraser Swiping
     if (isErasingRef.current) {
-      const eraserRadius = Math.max(14, (currentWidth * 2.5) / transform.zoom);
+      const eraserRadius = Math.max(1, (currentWidth / 2) / transform.zoom);
       const native = e.nativeEvent as any;
       if (typeof native.getCoalescedEvents === 'function') {
         const coalesced = native.getCoalescedEvents();
@@ -805,6 +1034,23 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
       } catch {}
       return;
     }
+
+    // If the water bubble menu is open, lifting the pen selects that color and closes immediately!
+    if (radialMenuRef.current.isOpen) {
+      const chosenColor = radialMenuRef.current.activeHoverColor;
+      if (chosenColor) {
+        onSelectColor?.(chosenColor);
+      }
+      radialMenuRef.current = { x: 0, y: 0, isOpen: false, activeHoverColor: null, isPenDown: false };
+      setRadialMenu({ x: 0, y: 0, isOpen: false, activeHoverColor: null });
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {}
+      return;
+    }
+
 
     // Cancel any pending long press
     if (longPressTimerRef.current) {
@@ -879,6 +1125,19 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
           e.currentTarget.releasePointerCapture(e.pointerId);
         }
       } catch {}
+
+      const downInfo = pointerDownInfoRef.current;
+      pointerDownInfoRef.current = null;
+      if (downInfo && Date.now() - downInfo.time < 280) {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const localX = e.clientX - rect.left;
+        const localY = e.clientY - rect.top;
+        const dist = Math.hypot(localX - downInfo.x, localY - downInfo.y);
+        // Only count as tap if pen stayed tightly in place (<= 8px movement)
+        if (dist <= 8) {
+          processTapGesture(localX, localY);
+        }
+      }
       return;
     }
 
@@ -899,8 +1158,10 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
       // Ignored
     }
 
-    const rect = target.getBoundingClientRect();
-    activeBuilderRef.current.addCoalescedEvents(e.nativeEvent, rect, transform);
+    const rect = canvasRectRef.current || target.getBoundingClientRect();
+    if (e.clientX !== 0 || e.clientY !== 0) {
+      activeBuilderRef.current.addCoalescedEvents(e.nativeEvent, rect, transform);
+    }
 
     const finalizedStroke = activeBuilderRef.current.build();
 
@@ -939,9 +1200,23 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
 
       onStrokeComplete(finalizedStroke);
     }
+
+    // Process Tap Gestures (Double-tap cycle color, Triple-tap toggle pen/eraser)
+    const downInfo = pointerDownInfoRef.current;
+    pointerDownInfoRef.current = null;
+    if (downInfo && Date.now() - downInfo.time < 280) {
+      const localX = e.clientX - rect.left;
+      const localY = e.clientY - rect.top;
+      const dist = Math.hypot(localX - downInfo.x, localY - downInfo.y);
+      // Only count as tap if pen stayed tightly in place (<= 8px movement)
+      if (dist <= 8) {
+        processTapGesture(localX, localY, finalizedStroke?.id);
+      }
+    }
   };
 
   const handlePointerCancel = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    pointerDownInfoRef.current = null;
     activePointersRef.current.delete(e.pointerId);
     if (isTwoFingerGestureRef.current) {
       const remainingTouches = Array.from(activePointersRef.current.values()).filter(
@@ -958,6 +1233,10 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
   };
 
   const handlePointerLeave = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (hoveredImageIdRef.current) {
+      hoveredImageIdRef.current = null;
+      onHoverImage?.(null);
+    }
     if (reticleRef.current) {
       reticleRef.current.style.display = 'none';
     }
@@ -968,7 +1247,8 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
 
   const handleSelectColorFromRadial = (newColor: string) => {
     onSelectColor?.(newColor);
-    setRadialMenu({ x: 0, y: 0, isOpen: false });
+    radialMenuRef.current = { x: 0, y: 0, isOpen: false, activeHoverColor: null, isPenDown: false };
+    setRadialMenu({ x: 0, y: 0, isOpen: false, activeHoverColor: null });
   };
 
   const getCursorClass = () => {
@@ -982,16 +1262,42 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
     return 'cursor-none';
   };
 
-  // Calculate actual pixel radius of pointer on screen
+  // Calculate actual pixel diameter of pointer on screen
   const reticleDiameter = Math.max(
-    currentTool === 'stroke-eraser' ? 16 : 4,
-    currentWidth * transform.zoom
+    2,
+    Math.round(currentWidth * transform.zoom)
   );
+
+  const handleDoubleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // If click gestures are enabled, processTapGesture handles it with sub-pixel tap tracking
+    if (isClickGesturesEnabled) return;
+
+    const container = containerRef.current;
+    if (!container || !images || images.length === 0) return;
+    const rect = container.getBoundingClientRect();
+    const localX = e.clientX - rect.left;
+    const localY = e.clientY - rect.top;
+    const world = Viewport.screenToWorld(localX, localY, transform);
+
+    for (let i = images.length - 1; i >= 0; i--) {
+      const img = images[i];
+      if (
+        world.x >= img.x &&
+        world.x <= img.x + img.width &&
+        world.y >= img.y &&
+        world.y <= img.y + img.height
+      ) {
+        onToggleImageFix?.(img.id);
+        return;
+      }
+    }
+  }, [isClickGesturesEnabled, images, transform, onToggleImageFix]);
 
   return (
     <div
       ref={containerRef}
       onWheel={handleWheel}
+      onDoubleClick={handleDoubleClick}
       className={`relative w-full h-full overflow-hidden select-none touch-none ${getCursorClass()}`}
     >
       {/* Layer 1: Background & Grid */}
@@ -999,6 +1305,11 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
         ref={bgCanvasRef}
         className="absolute inset-0 pointer-events-none z-0"
       />
+
+      {/* Layer 1.5: Movable Images Layer (Rendered below ink strokes so stylus/pen draws directly on top!) */}
+      <div className="absolute inset-0 pointer-events-none overflow-visible">
+        {children}
+      </div>
 
       {/* Layer 2: Committed Ink Strokes */}
       <canvas
@@ -1017,34 +1328,82 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
         className="absolute inset-0 z-20 touch-none"
       />
 
-      {/* Dynamic Pen-Size Brush Pointer Reticle (0 React re-renders, 120fps hardware accelerated) */}
+      {/* Dynamic Pen-Size Brush Pointer Reticle / Eraser Symbol (0 React re-renders, 120fps hardware accelerated) */}
       {!isSpacePressed && currentTool !== 'pan' && (
         <div
           ref={reticleRef}
           style={{
             display: 'none',
             transform: 'translate3d(-100px, -100px, 0) translate(-50%, -50%)',
-            width: `${reticleDiameter}px`,
-            height: `${reticleDiameter}px`,
-            borderColor: currentTool === 'stroke-eraser' ? '#ef4444' : currentColor,
-            backgroundColor:
-              currentTool === 'stroke-eraser'
-                ? 'rgba(239, 68, 68, 0.16)'
-                : currentTool === 'highlighter'
-                ? currentColor + '40'
-                : currentColor + '20',
           }}
-          className="absolute top-0 left-0 pointer-events-none z-30 rounded-full border shadow-sm will-change-transform flex items-center justify-center transition-none"
+          className="absolute top-0 left-0 pointer-events-none z-30 will-change-transform flex items-center justify-center transition-none"
         >
-          {/* Center pinpoint for ultra precision */}
-          <div
-            style={{
-              backgroundColor: currentTool === 'stroke-eraser' ? '#ef4444' : currentColor,
-              width: Math.min(3, Math.max(1.5, reticleDiameter * 0.25)),
-              height: Math.min(3, Math.max(1.5, reticleDiameter * 0.25)),
-            }}
-            className="rounded-full shadow-xs"
-          />
+          {currentTool === 'stroke-eraser' ? (
+            /* Custom Angled Eraser Pointer Symbol */
+            <div className="relative pointer-events-none select-none">
+              {/* Angled Eraser Icon pointing right at cursor */}
+              <div
+                style={{
+                  transform: 'translate(0px, -20px)',
+                }}
+                className="absolute left-0 bottom-0 pointer-events-none drop-shadow-[0_2px_6px_rgba(0,0,0,0.75)]"
+              >
+                <svg
+                  width="22"
+                  height="22"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  {/* Pink Rubber Head */}
+                  <path
+                    d="M7 21L2.7 16.7a2.1 2.1 0 0 1 0-3l10.6-10.6a2.1 2.1 0 0 1 3 0l4.4 4.4a2.1 2.1 0 0 1 0 3L11 21z"
+                    fill="#f43f5e"
+                    stroke="#ffffff"
+                    strokeWidth="1.5"
+                  />
+                  {/* White / Silver Grip Band */}
+                  <path d="M5.5 14.5l5 5" stroke="#ffffff" strokeWidth="2" />
+                  <path d="M8.5 11.5l5 5" stroke="rgba(255,255,255,0.75)" strokeWidth="1.5" />
+                </svg>
+              </div>
+
+              {/* Exact Contact Point (2px precision indicator) */}
+              <div
+                style={{
+                  width: `${Math.max(2, Math.round(currentWidth * transform.zoom))}px`,
+                  height: `${Math.max(2, Math.round(currentWidth * transform.zoom))}px`,
+                }}
+                className="rounded-full bg-red-500 border border-white shadow-xs -translate-x-1/2 -translate-y-1/2"
+              />
+            </div>
+          ) : (
+            /* Precision Circular Pen / Highlighter Reticle */
+            <div
+              style={{
+                width: `${reticleDiameter}px`,
+                height: `${reticleDiameter}px`,
+                borderColor: currentColor,
+                backgroundColor:
+                  currentTool === 'highlighter'
+                    ? currentColor + '40'
+                    : currentColor + '20',
+              }}
+              className="rounded-full border shadow-sm flex items-center justify-center"
+            >
+              {/* Center pinpoint for ultra precision */}
+              <div
+                style={{
+                  backgroundColor: currentColor,
+                  width: Math.min(3, Math.max(1.5, reticleDiameter * 0.25)),
+                  height: Math.min(3, Math.max(1.5, reticleDiameter * 0.25)),
+                }}
+                className="rounded-full shadow-xs"
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -1056,44 +1415,44 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
             top: `${radialMenu.y}px`,
             transform: 'translate(-50%, -50%)',
           }}
-          className={`absolute z-50 p-2.5 rounded-full shadow-2xl backdrop-blur-2xl border select-none animate-in zoom-in-75 duration-150 ${
-            theme === 'whiteboard'
-              ? 'bg-white/95 border-slate-300 shadow-[0_16px_48px_rgba(0,0,0,0.25)]'
-              : 'bg-slate-900/95 border-white/25 shadow-[0_16px_48px_rgba(0,0,0,0.8)]'
-          }`}
-          onClick={e => e.stopPropagation()}
+          className="absolute z-50 select-none animate-in fade-in duration-150 pointer-events-none"
         >
-          <div className="relative w-36 h-36 flex items-center justify-center">
-            {/* Center: Current active color button */}
-            <button
-              onClick={() => setRadialMenu({ x: 0, y: 0, isOpen: false })}
-              title="Close Color Wheel"
-              style={{ backgroundColor: currentColor }}
-              className="w-10 h-10 rounded-full shadow-lg border-2 border-white/60 flex items-center justify-center hover:scale-105 transition-transform"
+          <div className="relative w-44 h-44 flex items-center justify-center pointer-events-auto">
+            {/* Center Core: Current selected color */}
+            <div
+              style={{ backgroundColor: radialMenu.activeHoverColor || currentColor }}
+              className="relative w-11 h-11 rounded-full flex items-center justify-center shadow-lg transition-colors border-2 border-white/80"
             >
-              <Check className="w-5 h-5 text-white drop-shadow-md" />
-            </button>
+              <Check className="w-4 h-4 text-white" />
+            </div>
 
-            {/* Orbiting Radial Color Swatches */}
+            {/* Orbiting Color Swatches */}
             {themeConfig.penColors.map((c, i) => {
               const angle = (i * 2 * Math.PI) / themeConfig.penColors.length - Math.PI / 2;
-              const radius = 50; // px distance from center
+              const radius = 56; // distance from center
               const x = Math.round(radius * Math.cos(angle));
               const y = Math.round(radius * Math.sin(angle));
+              const isBubbleHovered = radialMenu.activeHoverColor === c.value;
 
               return (
-                <button
+                <div
                   key={c.value}
                   onClick={() => handleSelectColorFromRadial(c.value)}
+                  onPointerEnter={() => {
+                    radialMenuRef.current.activeHoverColor = c.value;
+                    setRadialMenu(prev => ({ ...prev, activeHoverColor: c.value }));
+                  }}
                   style={{
                     backgroundColor: c.value,
                     transform: `translate(${x}px, ${y}px)`,
                   }}
                   title={c.name}
-                  className={`absolute w-8 h-8 rounded-full border-2 shadow-lg transition-transform hover:scale-125 active:scale-95 ${
-                    currentColor === c.value
-                      ? 'border-blue-500 ring-2 ring-blue-400 scale-110'
-                      : 'border-white/50 hover:border-white'
+                  className={`absolute w-8 h-8 rounded-full cursor-pointer border-2 flex items-center justify-center shadow-md transition-all ${
+                    isBubbleHovered
+                      ? 'border-white ring-2 ring-blue-400 scale-110 z-10'
+                      : currentColor === c.value
+                      ? 'border-white ring-1 ring-white/50'
+                      : 'border-white/40 hover:border-white'
                   }`}
                 />
               );
@@ -1101,6 +1460,7 @@ const WhiteboardCanvasComponent: React.FC<WhiteboardCanvasProps> = ({
           </div>
         </div>
       )}
+
     </div>
   );
 };

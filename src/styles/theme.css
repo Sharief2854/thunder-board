@@ -1,44 +1,47 @@
-/* Theme CSS Variables */
+/* Theme CSS Variables - Refined Professional Dark Theme */
 :root {
-  --bg-primary: #111317;
-  --bg-surface: #1a1d24;
-  --bg-surface-hover: #262a34;
-  --border-color: rgba(255, 255, 255, 0.1);
+  --bg-primary: #000000;
+  --bg-surface: #0a0f1d;
+  --bg-surface-elevated: #111827;
+  --bg-surface-hover: #1e293b;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-medium: rgba(255, 255, 255, 0.16);
+  --border-focus: #3b82f6;
   --text-primary: #f8fafc;
-  --text-muted: #94a3b8;
-  --accent: #3b82f6;
-  --accent-hover: #2563eb;
+  --text-secondary: #cbd5e1;
+  --text-muted: #64748b;
+  --accent-primary: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-glow: rgba(37, 99, 235, 0.2);
+  --danger: #ef4444;
+  --success: #10b981;
 }
 
-.theme-whiteboard {
-  --bg-primary: #f8fafc;
-  --bg-surface: #ffffff;
-  --bg-surface-hover: #f1f5f9;
-  --border-color: rgba(0, 0, 0, 0.1);
-  --text-primary: #0f172a;
+.theme-whiteboard,
+.theme-blackboard {
+  --bg-primary: #000000;
+  --bg-surface: #0a0f1d;
+  --bg-surface-elevated: #111827;
+  --bg-surface-hover: #1e293b;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-medium: rgba(255, 255, 255, 0.16);
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
   --text-muted: #64748b;
-  --accent: #2563eb;
+  --accent-primary: #2563eb;
   --accent-hover: #1d4ed8;
 }
 
-.theme-blackboard {
-  --bg-primary: #111317;
-  --bg-surface: #1a1d24;
-  --bg-surface-hover: #262a34;
-  --border-color: rgba(255, 255, 255, 0.1);
-  --text-primary: #f8fafc;
-  --text-muted: #94a3b8;
-  --accent: #38bdf8;
-  --accent-hover: #0284c7;
-}
-
 .theme-chalkboard {
-  --bg-primary: #18241e;
-  --bg-surface: #22332a;
-  --bg-surface-hover: #2d4237;
-  --border-color: rgba(255, 255, 255, 0.12);
+  --bg-primary: #0b1913;
+  --bg-surface: #0f241c;
+  --bg-surface-elevated: #153327;
+  --bg-surface-hover: #1c4233;
+  --border-subtle: rgba(255, 255, 255, 0.1);
+  --border-medium: rgba(255, 255, 255, 0.2);
   --text-primary: #ecfdf5;
-  --text-muted: #a7f3d0;
-  --accent: #34d399;
-  --accent-hover: #10b981;
+  --text-secondary: #a7f3d0;
+  --text-muted: #6ee7b7;
+  --accent-primary: #10b981;
+  --accent-hover: #059669;
 }

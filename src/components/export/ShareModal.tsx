@@ -10,13 +10,12 @@ import {
   FileImage,
   Globe,
   Code,
-  Sparkles,
   Printer,
   FileText,
   Layers,
   Info,
 } from 'lucide-react';
-import { BoardThemeType, Stroke, TextBoxElement, WhiteboardDocument, WhiteboardPage } from '../../types/whiteboard';
+import { BoardThemeType, Stroke, TextBoxElement, ImageElement, WhiteboardDocument, WhiteboardPage } from '../../types/whiteboard';
 import { ExportManager } from '../../core/export/ExportManager';
 
 interface ShareModalProps {
@@ -26,6 +25,7 @@ interface ShareModalProps {
   activePage: WhiteboardPage;
   strokes: Record<string, Stroke>;
   textElements?: Record<string, TextBoxElement>;
+  imageElements?: Record<string, ImageElement>;
   theme: BoardThemeType;
   onImportDocument: (doc: WhiteboardDocument) => void;
 }
@@ -37,6 +37,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   activePage,
   strokes,
   textElements,
+  imageElements,
   theme,
   onImportDocument,
 }) => {
@@ -47,6 +48,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
   const effectiveTextElements = textElements || whiteboardDoc.textElements || {};
+  const effectiveImageElements = imageElements || whiteboardDoc.imageElements || {};
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -68,7 +70,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   };
 
   const handleCopyImage = async () => {
-    const success = await ExportManager.copyPageToClipboard(activePage, strokes, theme, effectiveTextElements);
+    const success = await ExportManager.copyPageToClipboard(activePage, strokes, theme, effectiveTextElements, effectiveImageElements);
     if (success) {
       setCopied(true);
       showFeedback('High-resolution page copied to clipboard!');
@@ -76,15 +78,15 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     }
   };
 
-  const handleSave4kPng = () => {
-    const success = ExportManager.savePageAsPng(activePage, strokes, theme, effectiveTextElements);
+  const handleSave4kPng = async () => {
+    const success = await ExportManager.savePageAsPng(activePage, strokes, theme, effectiveTextElements, effectiveImageElements);
     if (success) {
       showFeedback(`Saved 4K PNG: "${activePage.title}"`);
     }
   };
 
   const handleSaveSvg = () => {
-    const success = ExportManager.savePageAsSvg(activePage, strokes, theme, effectiveTextElements);
+    const success = ExportManager.savePageAsSvg(activePage, strokes, theme, effectiveTextElements, effectiveImageElements);
     if (success) {
       showFeedback(`Saved Vector SVG: "${activePage.title}"`);
     }
@@ -104,7 +106,8 @@ export const ShareModal: React.FC<ShareModalProps> = ({
       pagesToExport,
       strokes,
       theme,
-      effectiveTextElements
+      effectiveTextElements,
+      effectiveImageElements
     );
 
     setIsExporting(false);
@@ -145,28 +148,29 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
       {/* Modal Card */}
       <div
-        className={`relative z-10 w-full max-w-xl rounded-2xl shadow-2xl border overflow-hidden transition-all ${
+        className={`relative z-10 w-full max-w-xl rounded-xl shadow-2xl border overflow-hidden transition-all ${
           isDark
-            ? 'bg-slate-900/95 border-white/15 text-slate-100 shadow-[0_20px_60px_rgba(0,0,0,0.7)]'
-            : 'bg-white/95 border-slate-200 text-slate-800 shadow-[0_20px_60px_rgba(0,0,0,0.15)]'
+            ? 'bg-slate-900 border-white/10 text-slate-100'
+            : 'bg-white border-slate-200 text-slate-900'
         }`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-current/10">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-blue-500/15 text-blue-400">
+            <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
               <Share2 className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="font-bold text-sm tracking-tight">Share & Export Lecture Notes</h2>
-              <p className="text-[11px] opacity-60">
+              <h2 className="font-semibold text-sm tracking-tight">Share & Export Lecture Notes</h2>
+              <p className="text-xs text-slate-400">
                 {whiteboardDoc.title} • {whiteboardDoc.pages.length} Pages
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg opacity-70 hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-colors"
+            aria-label="Close modal"
           >
             <X className="w-4 h-4" />
           </button>
@@ -174,99 +178,92 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
         {/* Feedback Alert Toast */}
         {feedbackMessage && (
-          <div className="px-6 py-2 bg-emerald-500/15 border-b border-emerald-500/20 text-emerald-400 text-xs font-semibold flex items-center gap-2 animate-in fade-in">
-            <Check className="w-4 h-4" />
+          <div className="px-6 py-2.5 bg-emerald-500/10 border-b border-emerald-500/20 text-emerald-400 text-xs font-medium flex items-center gap-2">
+            <Check className="w-4 h-4 shrink-0" />
             <span>{feedbackMessage}</span>
           </div>
         )}
 
-        {/* Scope Selector: Entire Batch vs Current Page */}
-        <div className="px-6 pt-3 pb-1 flex items-center justify-between gap-2 border-b border-current/10 bg-black/5 dark:bg-white/5">
-          <span className="text-[11px] font-semibold opacity-70 flex items-center gap-1.5">
+        {/* Scope Selector */}
+        <div className="px-6 py-3 flex items-center justify-between gap-2 border-b border-white/5 bg-slate-950/40">
+          <span className="text-xs text-slate-400 flex items-center gap-1.5 font-medium">
             <Layers className="w-3.5 h-3.5 text-blue-400" />
-            <span>Export Scope:</span>
+            <span>Scope:</span>
           </span>
 
-          <div className="flex p-0.5 rounded-xl bg-black/10 dark:bg-white/10 text-xs font-medium">
+          <div className="flex p-0.5 rounded-lg bg-slate-800/80 border border-white/5 text-xs">
             <button
               onClick={() => setExportScope('batch')}
-              className={`px-3 py-1 rounded-lg transition-all ${
+              className={`px-3 py-1 rounded-md transition-colors ${
                 exportScope === 'batch'
-                  ? 'bg-blue-600 text-white font-bold shadow-sm'
-                  : 'opacity-70 hover:opacity-100'
+                  ? 'bg-blue-600 text-white font-medium shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               All Pages ({whiteboardDoc.pages.length})
             </button>
             <button
               onClick={() => setExportScope('page')}
-              className={`px-3 py-1 rounded-lg transition-all truncate max-w-[200px] ${
+              className={`px-3 py-1 rounded-md transition-colors truncate max-w-[200px] ${
                 exportScope === 'page'
-                  ? 'bg-blue-600 text-white font-bold shadow-sm'
-                  : 'opacity-70 hover:opacity-100'
+                  ? 'bg-blue-600 text-white font-medium shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
               }`}
               title={activePage.title}
             >
-              Current Page ({activePage.title})
+              Current Page
             </button>
           </div>
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex border-b border-current/10 px-6 pt-2 gap-2 text-xs font-semibold overflow-x-auto">
-          {/* TAB 1: Student Web App */}
+        <div className="flex border-b border-white/10 px-6 gap-2 text-xs font-medium overflow-x-auto">
           <button
             onClick={() => setActiveTab('students')}
-            className={`pb-2.5 px-3 border-b-2 transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`py-3 px-2 border-b-2 transition-colors flex items-center gap-2 shrink-0 ${
               activeTab === 'students'
-                ? 'border-blue-500 text-blue-400 font-bold'
-                : 'border-transparent opacity-60 hover:opacity-100'
+                ? 'border-blue-500 text-blue-400 font-semibold'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Globe className="w-3.5 h-3.5" />
+            <Globe className="w-4 h-4" />
             <span>Web Notes (.html)</span>
-            <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-bold">
-              BEST FOR STUDENTS
-            </span>
           </button>
 
-          {/* TAB 2: Vector SVG & 4K PNG */}
           <button
             onClick={() => setActiveTab('vector')}
-            className={`pb-2.5 px-3 border-b-2 transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`py-3 px-2 border-b-2 transition-colors flex items-center gap-2 shrink-0 ${
               activeTab === 'vector'
-                ? 'border-blue-500 text-blue-400 font-bold'
-                : 'border-transparent opacity-60 hover:opacity-100'
+                ? 'border-blue-500 text-blue-400 font-semibold'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            <FileImage className="w-3.5 h-3.5" />
-            <span>Vector SVG & 4K Image</span>
+            <FileImage className="w-4 h-4" />
+            <span>Vector & Image</span>
           </button>
 
-          {/* TAB 3: Print / PDF */}
           <button
             onClick={() => setActiveTab('print')}
-            className={`pb-2.5 px-3 border-b-2 transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`py-3 px-2 border-b-2 transition-colors flex items-center gap-2 shrink-0 ${
               activeTab === 'print'
-                ? 'border-blue-500 text-blue-400 font-bold'
-                : 'border-transparent opacity-60 hover:opacity-100'
+                ? 'border-blue-500 text-blue-400 font-semibold'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Printer className="w-3.5 h-3.5" />
+            <Printer className="w-4 h-4" />
             <span>Print / PDF</span>
           </button>
 
-          {/* TAB 4: Raw Backup & Restore */}
           <button
             onClick={() => setActiveTab('backup')}
-            className={`pb-2.5 px-3 border-b-2 transition-all flex items-center gap-1.5 shrink-0 ${
+            className={`py-3 px-2 border-b-2 transition-colors flex items-center gap-2 shrink-0 ${
               activeTab === 'backup'
-                ? 'border-blue-500 text-blue-400 font-bold'
-                : 'border-transparent opacity-60 hover:opacity-100'
+                ? 'border-blue-500 text-blue-400 font-semibold'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            <FileArchive className="w-3.5 h-3.5" />
-            <span>Editable Backup (.sblesson)</span>
+            <FileArchive className="w-4 h-4" />
+            <span>Backup (.thunderboard)</span>
           </button>
         </div>
 
@@ -275,48 +272,46 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           {/* TAB 1: WEB VIEWER (.HTML) */}
           {activeTab === 'students' && (
             <div className="space-y-4">
-              <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs space-y-1.5">
-                <div className="flex items-center gap-2 font-bold text-blue-400">
-                  <Sparkles className="w-4 h-4" />
-                  <span>Interactive Student Experience (Zero Apps Needed):</span>
+              <div className="p-3.5 rounded-lg bg-slate-800/60 border border-white/5 text-xs space-y-1.5">
+                <div className="flex items-center gap-2 font-medium text-blue-400">
+                  <Globe className="w-4 h-4" />
+                  <span>Interactive HTML Document</span>
                 </div>
-                <p className="opacity-80 leading-relaxed text-[11px]">
-                  Generates a single self-contained <code className="text-blue-300 font-mono">.html</code> file. Students can open it in <strong>Chrome, Edge, Safari, or on mobile devices</strong>. Includes a <strong>left topic navigation sidebar</strong>, <strong>infinite zoom</strong>, <strong>dark/light toggle</strong>, and a <strong>1-click Print to PDF button</strong>.
+                <p className="text-slate-300 leading-relaxed text-xs">
+                  Generates a self-contained <code className="text-blue-300 font-mono">.html</code> file viewable in any modern browser. Supports sidebar navigation, zooming, theme toggling, and PDF export without needing any third-party app.
                 </p>
               </div>
 
-              {/* Main Export Action */}
               <button
                 onClick={handleExportHtmlViewer}
                 disabled={isExporting}
-                className="w-full py-3.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center justify-between transition-all shadow-md shadow-blue-900/30 border border-blue-500/30"
+                className="w-full py-3 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-medium text-xs flex items-center justify-between transition-colors shadow-sm disabled:opacity-50"
               >
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2">
                   <Globe className="w-4 h-4" />
                   <span>
                     Export {exportScope === 'batch' ? 'All Pages' : 'Current Page'} as Interactive HTML
                   </span>
                 </div>
-                <span className="px-2 py-0.5 rounded bg-white/20 text-[10px] uppercase font-mono">
-                  {isExporting ? 'Exporting...' : 'Universal File'}
+                <span className="text-[11px] opacity-80 font-mono">
+                  {isExporting ? 'Exporting...' : 'HTML'}
                 </span>
               </button>
 
-              {/* Quick Copy to Clipboard for Slack/WhatsApp */}
               <button
                 onClick={handleCopyImage}
-                className={`w-full py-3 px-4 rounded-xl font-semibold text-xs flex items-center justify-between transition-all border ${
+                className={`w-full py-3 px-4 rounded-lg font-medium text-xs flex items-center justify-between transition-colors border ${
                   copied
-                    ? 'bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-500/20'
-                    : 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 border-current/15'
+                    ? 'bg-emerald-600 text-white border-emerald-500'
+                    : 'bg-slate-800/80 hover:bg-slate-800 text-slate-200 border-white/10'
                 }`}
               >
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2">
                   {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  <span>{copied ? 'Copied Full-Res Image!' : 'Copy Current Page to Clipboard'}</span>
+                  <span>{copied ? 'Page Copied to Clipboard!' : 'Copy Page to Clipboard'}</span>
                 </div>
-                <span className="text-[10px] opacity-70 font-mono">
-                  {copied ? 'Ready to Paste' : 'WhatsApp / Slack'}
+                <span className="text-[11px] text-slate-400 font-mono">
+                  {copied ? 'Ready' : 'Image'}
                 </span>
               </button>
             </div>
@@ -324,38 +319,34 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
           {/* TAB 2: VECTOR SVG & 4K PNG */}
           {activeTab === 'vector' && (
-            <div className="space-y-3.5">
-              <div className="flex items-center justify-between text-xs opacity-70 pb-1">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-xs text-slate-400 pb-1">
                 <span>
-                  Target Page: <strong className="text-blue-400">{activePage.title}</strong>
+                  Target Page: <strong className="text-slate-200">{activePage.title}</strong>
                 </span>
                 <span className="font-mono">{currentStrokesCount} strokes</span>
               </div>
 
-              {/* Vector SVG */}
               <button
                 onClick={handleSaveSvg}
-                className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center justify-between transition-all shadow-md border border-emerald-500/30"
+                className="w-full py-3 px-4 rounded-lg bg-slate-800 hover:bg-slate-700/80 text-white font-medium text-xs flex items-center justify-between transition-colors border border-white/10"
               >
-                <div className="flex items-center gap-2.5">
-                  <Code className="w-4 h-4" />
+                <div className="flex items-center gap-2">
+                  <Code className="w-4 h-4 text-emerald-400" />
                   <span>Download Vector SVG (.svg)</span>
                 </div>
-                <span className="text-[10px] uppercase tracking-wider font-mono opacity-80">
-                  Infinite Zoom (0% Blur)
-                </span>
+                <span className="text-[11px] text-slate-400 font-mono">Vector</span>
               </button>
 
-              {/* 4K Ultra-HD PNG */}
               <button
                 onClick={handleSave4kPng}
-                className="w-full py-3.5 px-4 rounded-xl font-semibold text-xs flex items-center justify-between transition-all border border-current/15 hover:bg-black/5 dark:hover:bg-white/5"
+                className="w-full py-3 px-4 rounded-lg bg-slate-800 hover:bg-slate-700/80 text-white font-medium text-xs flex items-center justify-between transition-colors border border-white/10"
               >
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2">
                   <Download className="w-4 h-4 text-blue-400" />
-                  <span>Download 4K Ultra-HD PNG (3840 × 2160)</span>
+                  <span>Download 4K PNG (3840 × 2160)</span>
                 </div>
-                <span className="text-[10px] opacity-60 uppercase font-mono">Crisp 4K</span>
+                <span className="text-[11px] text-slate-400 font-mono">3840 × 2160</span>
               </button>
             </div>
           )}
@@ -363,71 +354,69 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           {/* TAB 3: PRINT / PDF */}
           {activeTab === 'print' && (
             <div className="space-y-3.5">
-              <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs space-y-1">
-                <div className="flex items-center gap-2 font-bold text-indigo-400">
+              <div className="p-3.5 rounded-lg bg-slate-800/60 border border-white/5 text-xs space-y-1">
+                <div className="flex items-center gap-2 font-medium text-indigo-400">
                   <FileText className="w-4 h-4" />
-                  <span>Print & Save as High-Definition PDF:</span>
+                  <span>Print & PDF Export</span>
                 </div>
-                <p className="opacity-80 text-[11px] leading-relaxed">
-                  Opens your system print dialog. In the destination dropdown, select <strong>"Save as PDF"</strong> to create a crisp, printable PDF document of your whiteboard notes.
+                <p className="text-slate-300 text-xs leading-relaxed">
+                  Opens the native print dialog. Select <strong>"Save as PDF"</strong> to export clean, printable lecture notes.
                 </p>
               </div>
 
               <button
                 onClick={handlePrint}
-                className="w-full py-3.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs flex items-center justify-between transition-all shadow-lg shadow-blue-500/20"
+                className="w-full py-3 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-medium text-xs flex items-center justify-between transition-colors shadow-sm"
               >
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2">
                   <Printer className="w-4 h-4" />
-                  <span>Open Print Dialog / Save as PDF</span>
+                  <span>Open Print Dialog</span>
                 </div>
-                <span className="text-[10px] opacity-80 uppercase font-mono">System Print</span>
+                <span className="text-[11px] opacity-80 font-mono">System</span>
               </button>
             </div>
           )}
 
           {/* TAB 4: EDITABLE BACKUP & RESTORE */}
           {activeTab === 'backup' && (
-            <div className="space-y-4">
-              <div className="p-3.5 rounded-xl bg-black/5 dark:bg-white/5 border border-current/10 text-xs space-y-1">
-                <div className="flex items-center gap-2 font-bold text-blue-400">
+            <div className="space-y-3">
+              <div className="p-3.5 rounded-lg bg-slate-800/60 border border-white/5 text-xs space-y-1">
+                <div className="flex items-center gap-2 font-medium text-blue-400">
                   <Info className="w-4 h-4" />
-                  <span>Editable ThunderBoard Format (.thunderboard):</span>
+                  <span>Document Backup & Migration</span>
                 </div>
-                <p className="opacity-80 text-[11px] leading-relaxed">
-                  This file is an <strong>editable raw backup</strong>. Use this when transferring your lectures to another trainer or restoring your notes on a new computer.
+                <p className="text-slate-300 text-xs leading-relaxed">
+                  Export editable raw backups to transfer boards between devices or archive finished lectures.
                 </p>
               </div>
 
-              {/* Export Backup */}
               <button
                 onClick={handleExportLesson}
                 disabled={isExporting}
-                className="w-full py-3.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs flex items-center justify-between transition-all shadow-md border border-blue-500/30"
+                className="w-full py-3 px-4 rounded-lg bg-slate-800 hover:bg-slate-700/80 text-white font-medium text-xs flex items-center justify-between transition-colors border border-white/10 disabled:opacity-50"
               >
-                <div className="flex items-center gap-2.5">
-                  <FileArchive className="w-4 h-4" />
-                  <span>Export Editable Lesson Backup (.thunderboard)</span>
+                <div className="flex items-center gap-2">
+                  <FileArchive className="w-4 h-4 text-blue-400" />
+                  <span>Export Document Backup (.thunderboard)</span>
                 </div>
-                <span className="text-[10px] opacity-80 uppercase font-mono">Full Backup</span>
+                <span className="text-[11px] text-slate-400 font-mono">Archive</span>
               </button>
 
-              {/* Import Backup */}
               <button
                 onClick={handleImport}
-                className="w-full py-3.5 px-4 rounded-xl bg-blue-600/10 hover:bg-blue-600/20 border-2 border-dashed border-blue-500/40 text-blue-400 font-semibold text-xs flex items-center justify-center gap-2 transition-all"
+                className="w-full py-3 px-4 rounded-lg bg-transparent hover:bg-white/5 border border-dashed border-white/20 text-slate-300 hover:text-white font-medium text-xs flex items-center justify-center gap-2 transition-colors"
               >
-                <Upload className="w-4 h-4" />
-                <span>Import & Restore Lesson File (.thunderboard / .chalkbyte / .json)</span>
+                <Upload className="w-4 h-4 text-slate-400" />
+                <span>Import Backup (.thunderboard, .chalkbyte, .json)</span>
               </button>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-current/10 bg-black/5 dark:bg-white/5 text-[11px] opacity-60 flex items-center justify-between">
-          <span>100% Offline • Zero Quality Loss</span>
-          <span className="font-mono">Press Esc to close</span>
+        <div className="px-6 py-3 border-t border-white/10 bg-slate-950/40 text-xs text-slate-500 flex items-center justify-between">
+          <span>Offline processing</span>
+          <span className="font-mono text-[11px]">Esc to close</span>
         </div>
       </div>
     </div>

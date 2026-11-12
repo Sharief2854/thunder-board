@@ -29,6 +29,19 @@ export interface TextBoxElement {
   updatedAt: number;
 }
 
+export interface ImageElement {
+  id: string;
+  pageId: string;
+  x: number; // World coordinate x
+  y: number; // World coordinate y
+  width: number; // World width
+  height: number; // World height
+  src: string; // Base64 data URL
+  isFixed?: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface BoundingBox {
   minX: number;
   minY: number;
@@ -85,6 +98,7 @@ export interface Batch {
   pages: WhiteboardPage[];
   strokes: Record<string, Stroke>;
   textElements?: Record<string, TextBoxElement>;
+  imageElements?: Record<string, ImageElement>;
   theme: BoardThemeType;
 }
 
@@ -104,6 +118,7 @@ export interface WhiteboardDocument {
   pages: WhiteboardPage[];
   strokes: Record<string, Stroke>;
   textElements?: Record<string, TextBoxElement>;
+  imageElements?: Record<string, ImageElement>;
 }
 
 declare global {
@@ -113,13 +128,41 @@ declare global {
       maximize: () => void;
       close: () => void;
       isMaximized: () => Promise<boolean>;
+      undockToFloating?: () => Promise<{ success: boolean }>;
+      dockToFull?: () => Promise<{ success: boolean }>;
+      isAlwaysOnTop?: () => Promise<boolean>;
+      toggleAlwaysOnTop?: () => Promise<boolean>;
+      collapseToEdge?: () => Promise<{ success: boolean; edge?: 'left' | 'right' }>;
+      expandFromEdge?: () => Promise<{ success: boolean }>;
+      moveEdgePosition?: (newY: number) => Promise<void>;
+      onEdgeExpanded?: (callback: () => void) => () => void;
+      onToggleFloating?: (callback: () => void) => () => void;
+      onTriggerCollapseToEdge?: (callback: () => void) => () => void;
+      getVerticalPlacement?: () => Promise<'top' | 'bottom'>;
+      onVerticalPlacementChanged?: (callback: (placement: 'top' | 'bottom') => void) => () => void;
+      onWindowFocus?: (callback: () => void) => () => void;
+      onWindowBlur?: (callback: () => void) => () => void;
       saveBoard: (id: string, data: string) => Promise<{ success: boolean; path?: string; error?: string }>;
       loadBoard: (id: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+      deleteBoard?: (id: string) => Promise<{ success: boolean; error?: string }>;
       listBoards: () => Promise<{ success: boolean; boards?: string[]; error?: string }>;
       exportFile: (defaultName: string, content: string) => Promise<{ canceled: boolean; filePath?: string }>;
       importFile: () => Promise<{ canceled: boolean; content?: string; filePath?: string }>;
       selectDirectory: () => Promise<{ canceled: boolean; path?: string }>;
       saveBatchToDirectory: (dirPath: string, batchName: string, data: string, htmlContent?: string) => Promise<{ success: boolean; filePath?: string; htmlPath?: string; error?: string }>;
+      listAllLessonFiles?: () => Promise<{ success: boolean; files?: Array<{ name: string; path: string; size: number; updatedAt: number; ext: string; type: 'board' | 'html' | 'lesson' }>; error?: string }>;
+      showItemInFolder?: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+      openPath?: (folderPath: string) => Promise<{ success: boolean; error?: string }>;
+      readFilePath?: (filePath: string) => Promise<{ success: boolean; content?: string; error?: string }>;
+      readClipboardImage?: () => Promise<{ success: boolean; dataUrl?: string }>;
+      onBeforeQuit?: (callback: () => void) => () => void;
+      sendQuitConfirmed?: () => void;
+      checkForUpdates?: () => Promise<{ success: boolean; isDev?: boolean; message?: string; error?: string }>;
+      downloadUpdate?: () => Promise<{ success: boolean; error?: string }>;
+      quitAndInstall?: () => Promise<{ success: boolean; error?: string }>;
+      getUpdateStatus?: () => Promise<any>;
+      onUpdateStatus?: (callback: (status: any) => void) => () => void;
+      getAppVersion?: () => Promise<string>;
     };
   }
 }

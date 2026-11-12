@@ -1,4 +1,4 @@
-import { BoundingBox, Stroke, TextBoxElement, ViewportTransform } from '../../types/whiteboard';
+import { BoundingBox, Stroke, TextBoxElement, ImageElement, ViewportTransform } from '../../types/whiteboard';
 import { Viewport } from './Viewport';
 
 export class CanvasController {
@@ -40,11 +40,12 @@ export class CanvasController {
   }
 
   /**
-   * Calculate bounding box enclosing all strokes and movable text/code elements
+   * Calculate bounding box enclosing all strokes, movable text/code elements, and image elements
    */
   static getContentBoundingBox(
     strokes: Stroke[],
-    textElements?: TextBoxElement[]
+    textElements?: TextBoxElement[],
+    imageElements?: ImageElement[]
   ): BoundingBox | null {
     let minX = Infinity;
     let minY = Infinity;
@@ -71,6 +72,16 @@ export class CanvasController {
       }
     }
 
+    if (imageElements) {
+      for (const img of imageElements) {
+        hasContent = true;
+        minX = Math.min(minX, img.x);
+        minY = Math.min(minY, img.y);
+        maxX = Math.max(maxX, img.x + (img.width || 400));
+        maxY = Math.max(maxY, img.y + (img.height || 300));
+      }
+    }
+
     if (!hasContent) return null;
 
     return {
@@ -91,9 +102,10 @@ export class CanvasController {
     canvasWidth: number,
     canvasHeight: number,
     padding = 80,
-    textElements?: TextBoxElement[]
+    textElements?: TextBoxElement[],
+    imageElements?: ImageElement[]
   ): ViewportTransform {
-    const box = this.getContentBoundingBox(strokes, textElements);
+    const box = this.getContentBoundingBox(strokes, textElements, imageElements);
     if (!box) {
       return { x: 0, y: 0, zoom: 1 };
     }
